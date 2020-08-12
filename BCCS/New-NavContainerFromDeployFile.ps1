@@ -45,6 +45,10 @@ function New-NavContainerFromDeployFile {
     $deploy_addinPaths = $jsonData.addinPaths
     $deploy_rapidstartPaths = $jsonData.rapidstartPaths
     $deploy_licenseFile = $jsonData.licenseFilePath
+    $deploy_testtoolkit = $false
+    if ($jsonData -match "includeTestToolkit") {
+        $deploy_testtoolkit = $jsonData.includeTestToolkit
+    }
 
     $appFilePaths = @()
     $deploy_appFilePaths | ForEach-Object { $appFilePaths = $appFilePaths + (Join-Path ((Get-Item $file).Directory.FullName) -ChildPath $_ -Resolve) }
@@ -105,6 +109,7 @@ function New-NavContainerFromDeployFile {
         'useBestContainerOS'       = $true;
         'includeCSide'             = $true;
         'enableSymbolLoading'      = $true;
+        'includeTestToolkit'       = $deploy_testtoolkit;
     }
 
     if ($licenseFile -ne "") {
