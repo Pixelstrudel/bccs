@@ -50,9 +50,11 @@ function New-BCCSContainerFromTemplate {
 
     $fullContainerName = $prefix + "-" + $containerName
 
-    Check-NavContainerName -containerName $fullContainerName
+    Check-BcContainerName -containerName $fullContainerName
 
     $template = $jsonData | Where-Object prefix -eq $prefix
+
+    
 
     $params = @{
         'containerName'            = $fullContainerName;
@@ -68,6 +70,19 @@ function New-BCCSContainerFromTemplate {
         'useBestContainerOS'       = $true;
         'includeCSide'             = $true;
         'enableSymbolLoading'      = $true;
+        'isolation'                = 'hyperv';
+		'memoryLimit'              = '8G';
+    }
+
+    if (IsURL $imageName) {
+        Write-Log "Image Name = Image. Using Image."
+        $params += @{'imageName' = $imageName }
+    }
+    else {
+        Write-Log "Image Name = Artifact String. Finding Artifact URL..."
+        $artifactUrl = GetArtifactURLFromString $imageName
+        Write-Log "Found Artifact Url: $($artifactUrl)"
+        $params += @{'artifactUrl' = $artifactUrl }
     }
 
     if ($template.auth -match "UserPassword") {
@@ -92,13 +107,13 @@ function New-BCCSContainerFromTemplate {
 
     try {
         Write-Log "Creating container..."
-        New-NavContainer @params
+        New-BcContainer @params
         if ($template.licenseFile -ne "") {
             Write-Log "Importing license file..."
-            Import-NavContainerLicense -containerName $fullContainerName -licenseFile $template.licenseFile
+            Import-BcContainerLicense -containerName $fullContainerName -licenseFile $template.licenseFile
         }
         Write-Log "Adding fonts to container..."
-        Add-FontsToNavContainer -containerName $fullContainerName 
+        Add-FontsToBcContainer -containerName $fullContainerName 
     }
     catch {
         throw "Could not create $($fullContainerName)"

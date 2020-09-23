@@ -267,6 +267,7 @@ if (!(Test-Path -Path $bccsFolder -PathType Container)) {
 
 $bccsScriptFolder = $PSScriptRoot
 
+. (Join-Path $PSScriptRoot "BCCS\BCCS-Update.ps1")
 . (Join-Path $PSScriptRoot "BCCS\BCCS-FileManagement.ps1")
 
 . (Join-Path $PSScriptRoot "BCCS\New-BCCSTemplate.ps1")
@@ -279,5 +280,4 @@ $bccsScriptFolder = $PSScriptRoot
 . (Join-Path $PSScriptRoot "BCCS\Get-BCCSRepository.ps1")
 . (Join-Path $PSScriptRoot "BCCS\Get-BCCSImage.ps1")
 
-. (Join-Path $PSScriptRoot "BCCS\Show-BCCSGUI.ps1")
 . (Join-Path $PSScriptRoot "BCCS\Show-BCCSAssistant.ps1")
