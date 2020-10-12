@@ -6,6 +6,7 @@
 		"licenseFilePath": "..\\license.flf",
 		"fontPaths": [".\\fonts"],
 		"addinPaths": [".\\addins"],
-		"rapidstartPaths": [".\\rapidstart"]
+		"rapidstartPaths": [".\\rapidstart"],
+		"includeTestToolkit": false
     }
 ]

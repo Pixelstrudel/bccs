@@ -45,6 +45,10 @@ function New-BcContainerFromDeployFile {
     $deploy_addinPaths = $jsonData.addinPaths
     $deploy_rapidstartPaths = $jsonData.rapidstartPaths
     $deploy_licenseFile = $jsonData.licenseFilePath
+    $deploy_testtoolkit = $false
+    if ($jsonData -match "includeTestToolkit") {
+        $deploy_testtoolkit = $jsonData.includeTestToolkit
+    }
 
     $appFilePaths = @()
     $deploy_appFilePaths | ForEach-Object { $appFilePaths = $appFilePaths + (Join-Path ((Get-Item $file).Directory.FullName) -ChildPath $_ -Resolve) }
@@ -104,8 +108,9 @@ function New-BcContainerFromDeployFile {
         'useBestContainerOS'       = $true;
         'includeCSide'             = $true;
         'enableSymbolLoading'      = $true;
-		'isolation'                = 'hyperv';
-		'memoryLimit'              = '8G';
+        'includeTestToolkit'       = $deploy_testtoolkit;
+		    'isolation'                = 'hyperv';
+		    'memoryLimit'              = '8G';
     }
 
     Write-Log $deploy_imageName
