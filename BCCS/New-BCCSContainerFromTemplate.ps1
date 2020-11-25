@@ -74,13 +74,13 @@ function New-BCCSContainerFromTemplate {
 		'memoryLimit'              = '8G';
     }
 
-    if (IsURL $imageName) {
+    if (IsURL $template.imageName) {
         Write-Log "Image Name = Image. Using Image."
-        $params += @{'imageName' = $imageName }
+        $params += @{'imageName' = $template.imageName }
     }
     else {
         Write-Log "Image Name = Artifact String. Finding Artifact URL..."
-        $artifactUrl = GetArtifactURLFromString $imageName
+        $artifactUrl = GetArtifactURLFromString $template.imageName
         Write-Log "Found Artifact Url: $($artifactUrl)"
         $params += @{'artifactUrl' = $artifactUrl }
     }
