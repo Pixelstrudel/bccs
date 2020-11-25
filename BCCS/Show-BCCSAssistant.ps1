@@ -294,7 +294,7 @@ function Menu-ChangePWD() {
 function Menu-AddCurrentUser() {
         $selection = GetAllContainersFromDocker | Out-GridView -Title "Select a container to add your User to its NAV/BC service" -OutputMode Single
         if ($selection) {
-                New-BcContainerNavUser -WindowsAccount $env:USERNAME -containerName $selection.FullName -PermissionSetId SUPER 
+                New-BcContainerBcUser -WindowsAccount $env:USERNAME -containerName $selection.FullName -PermissionSetId SUPER 
                 Write-Log "Added user $env:USERNAME to $($selection.FullName)!"
         }       
 }
