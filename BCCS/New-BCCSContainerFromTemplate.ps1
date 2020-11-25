@@ -58,7 +58,6 @@ function New-BCCSContainerFromTemplate {
 
     $params = @{
         'containerName'            = $fullContainerName;
-        'imageName'                = $template.imageName;
         'auth'                     = $template.auth;
         'shortcuts'                = 'StartMenu';
         'accept_eula'              = $true;
