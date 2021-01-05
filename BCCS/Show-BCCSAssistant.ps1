@@ -197,6 +197,15 @@ function Menu-CreateContainerFromDeployFile {
                 N { $UseLicense = $false }
                 Default { $UseLicense = $false }
         }
+
+        Write-host "Use HyperV (with 8GB RAM) instead of process isolation? (defaults to no)" -ForegroundColor Yellow
+        Write-Host "NOTE: Process Isolation can cause issues with the Windows Activation."
+        $ReadHost = Read-Host " ( y / n ) "
+        Switch ($ReadHost) {
+                Y { $params += @{'isolation' = 'hyperv' } }
+                N { $params += @{'isolation' = 'process' } }
+                Default { $params += @{'isolation' = 'process' } }
+        }
         
         Write-Host ""
         $suffix = Read-Host "Please enter a suffix (e.g. 'TEST' or 'DEV' -> added to the prefix defined in the deploy file)"

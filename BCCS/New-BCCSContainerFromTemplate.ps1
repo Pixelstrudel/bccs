@@ -69,8 +69,15 @@ function New-BCCSContainerFromTemplate {
         'useBestContainerOS'       = $true;
         'includeCSide'             = $true;
         'enableSymbolLoading'      = $true;
-        'isolation'                = 'hyperv';
-		'memoryLimit'              = '8G';
+    }
+
+    Write-host "Use HyperV (with 8GB RAM) instead of process isolation? (defaults to no)" -ForegroundColor Yellow
+    Write-Host "NOTE: Process Isolation can cause issues with the Windows Activation."
+    $ReadHost = Read-Host " ( y / n ) "
+    Switch ($ReadHost) {
+        Y { $params += @{'isolation' = 'hyperv' } }
+        N { $params += @{'isolation' = 'process' } }
+        Default { $params += @{'isolation' = 'process' } }
     }
 
     if (IsURL $template.imageName) {
