@@ -31,18 +31,25 @@
  .Parameter AuthenticationEmail
   AuthenticationEmail of the admin user
  .Parameter memoryLimit
-  Memory limit for the container (default is unlimited for Windows Server host else 4G)
+  Memory limit for the container (default is unlimited for process isolation and 8G for hyperv isolation containers)
  .Parameter sqlMemoryLimit
   Memory limit for the SQL inside the container (default is no limit)
   Value can be specified as 50%, 1.5G, 1500M
  .Parameter isolation
-  Isolation mode for the container (default is process for Windows Server host else hyperv)
+  Isolation mode for the container (default is process isolation if host and container OS match)
  .Parameter databaseServer
   Name of database server when using external SQL Server (omit if using database inside the container)
  .Parameter databaseInstance
   Name of database instance when using external SQL Server (omit if using database inside the container)
+ .Parameter databasePrefix
+  Prefix of databases when using external SQL Server (omit if using database inside the container)
  .Parameter databaseName
   Name of database to connect to when using external SQL Server (omit if using database inside the container)
+ .Parameter replaceExternalDatabases
+  Include this switch to allow New-BcContainer to create/replace databases on the external SQL Server.
+  This parameter is ignored unless databaseServer, databasePrefix and databaseName is specified
+  This parameter uses Remove-BcDatabase and Restore-BcDatabaseFromArtifacts to remove and create the databases
+  Access to the SQL Server on the host must be Windows Authentication
  .Parameter bakFile
   Path or Secure Url of a bakFile if you want to restore a database in the container
  .Parameter bakFolder
@@ -150,17 +157,19 @@
   In this scriptblock you can install additional apps or import additional objects in your container.
   These apps/objects will be included in the backup if you specify bakFolder and this script will NOT run if a backup already exists in bakFolder.
  .Parameter vsixFile
-  Specify a URL or path to a .vsix file in order to override the .vsix file in the image with this
+  Specify a URL or path to a .vsix file in order to override the .vsix file in the image with this.
+  Use Get-LatestAlLanguageExtensionUrl to get latest AL Language extension from Marketplace.
+  Use Get-AlLanguageExtensionFromArtifacts -artifactUrl (Get-BCArtifactUrl -select NextMajor -sasToken $insiderSasToken) to get latest insider .vsix
  .Example
   New-BcContainer -accept_eula -containerName test
  .Example
   New-BcContainer -accept_eula -containerName test -multitenant
  .Example
-  New-BcContainer -accept_eula -containerName test -memoryLimit 3G -imageName "mcr.microsoft.com/dynamicsnav:2017" -updateHosts -useBestContainerOS
+  New-BcContainer -accept_eula -containerName test -memoryLimit 3G -artifactUrl (Get-NavArtifactUrl -nav 2017 -country w1) -updateHosts -imageName my
  .Example
-  New-BcContainer -accept_eula -containerName test -imageName "mcr.microsoft.com/businesscentral/onprem:dk" -myScripts @("c:\temp\AdditionalSetup.ps1") -AdditionalParameters @("-v c:\hostfolder:c:\containerfolder")
+  New-BcContainer -accept_eula -containerName test -artifactUrl (Get-BcArtifactUrl -type onprem -country dk) -myScripts @("c:\temp\AdditionalSetup.ps1") -AdditionalParameters @("-v c:\hostfolder:c:\containerfolder")
  .Example
-  New-BcContainer -accept_eula -containerName test -credential (get-credential -credential $env:USERNAME) -licenseFile "https://www.dropbox.com/s/fhwfwjfjwhff/license.flf?dl=1" -imageName "mcr.microsoft.com/businesscentral/onprem:de"
+  New-BcContainer -accept_eula -containerName test -credential (get-credential -credential $env:USERNAME) -licenseFile "https://www.dropbox.com/s/fhwfwjfjwhff/license.flf?dl=1" -artifactUrl (Get-BcArtifactUrl -country de)
 #>
 function New-BcContainer {
     Param (
@@ -187,7 +196,9 @@ function New-BcContainer {
         [string] $isolation = "",
         [string] $databaseServer = "",
         [string] $databaseInstance = "",
+        [string] $databasePrefix = "",
         [string] $databaseName = "",
+        [switch] $replaceExternalDatabases,
         [string] $bakFile = "",
         [string] $bakFolder = "",
         [PSCredential] $databaseCredential = $null,
@@ -242,13 +253,53 @@ function New-BcContainer {
         [switch] $doNotCheckHealth,
         [switch] $doNotUseRuntimePackages = $true,
         [string] $vsixFile = "",
+        [string] $applicationInsightsKey,
         [scriptblock] $finalizeDatabasesScriptBlock
     )
 
-    (Get-ContainerHelperConfig).defaultNewContainerParameters.GetEnumerator() | % {
-        if (!($PSBoundParameters.ContainsKey($_.Name))) {
-            Write-Host "Default parameter $($_.Name) = $($_.Value)"
-            Set-Variable -name $_.Name -Value $_.Value
+    $defaultNewContainerParameters = (Get-ContainerHelperConfig).defaultNewContainerParameters
+    if ($defaultNewContainerParameters -is [HashTable]) {
+        $defaultNewContainerParameters.GetEnumerator() | ForEach-Object {
+            if (!($PSBoundParameters.ContainsKey($_.Name))) {
+                if ($_.Name -eq "Credential" -or $_.Name -eq "DatabaseCredential") {
+                    Write-Host "Default parameter $($_.Name)"
+                    Set-Variable -Name $_.Name -Value (New-Object pscredential -ArgumentList $_.Value.Username, ($_.Value.Password | ConvertTo-SecureString))
+                }
+                else {
+                    Write-Host "Default parameter $($_.Name) = $($_.Value)"
+                    Set-Variable -name $_.Name -Value $_.Value
+                }
+            }
+            elseif ($_.Name -eq "AdditionalParameters") {
+                Write-Host "Merging $($_.Name)"
+                $additionalParameters = $_.Value + $additionalParameters
+            }
+            elseif ($_.Name -eq "MyScripts") {
+                Write-Host "Merging $($_.Name)"
+                $myScripts = $_.Value + $myScripts
+            }
+        }
+    }
+    elseif ($defaultNewContainerParameters -is [PSCustomObject]) {
+        $defaultNewContainerParameters.PSObject.Properties | ForEach-Object {
+            if (!($PSBoundParameters.ContainsKey($_.Name))) {
+                if ($_.Name -eq "Credential" -or $_.Name -eq "DatabaseCredential") {
+                    Write-Host "Default parameter $($_.Name)"
+                    Set-Variable -Name $_.Name -Value (New-Object pscredential -ArgumentList $_.Value.Username, ($_.Value.Password | ConvertTo-SecureString))
+                }
+                else {
+                    Write-Host "Default parameter $($_.Name) = $($_.Value)"
+                    Set-Variable -name $_.Name -Value $_.Value
+                }
+            }
+            elseif ($_.Name -eq "AdditionalParameters") {
+                Write-Host "Merging $($_.Name)"
+                $additionalParameters = $_.Value + $additionalParameters
+            }
+            elseif ($_.Name -eq "MyScripts") {
+                Write-Host "Merging $($_.Name)"
+                $myScripts = $_.Value + $myScripts
+            }
         }        
     }
 
@@ -256,11 +307,28 @@ function New-BcContainer {
         throw "You have to accept the eula (See https://go.microsoft.com/fwlink/?linkid=861843) by specifying the -accept_eula switch to the function"
     }
 
-    Check-BcContainerName -ContainerName $containerName
+    if ($includePerformanceToolkit) {
+        if (!$includeTestToolkit) {
+            $includeTestToolkit = $true
+            $includeTestFrameworkOnly = $true
+        }
+    }
 
-    if ($imageName.StartsWith('microsoft/dynamics-nav','InvariantCultureIgnoreCase')) {
-        Write-Host 'WARNING: using old docker hub name for NAV image. Replacing with mcr.microsoft.com/dynamicsnav'
-        $imageName = "mcr.microsoft.com/dynamicsnav$($imageName.Substring('microsoft/dynamics-nav'.Length))"
+    Check-BcContainerName -ContainerName $containerName
+    $imageName = $imageName.ToLowerInvariant()
+
+    if (!$useSSL) {
+        try {
+            $hsts = (New-Object System.Net.WebClient).DownloadString('https://hstspreload.com/api/v1/status/$containerName') | ConvertFrom-Json
+            if (($hsts.chrome) -or ($hsts.firefox) -or ($hsts.tor)) {
+                Write-Host -ForegroundColor Red "WARNING: '$containername' is in the HSTS preload list. You cannot use the container unless you use SSL and a trusted certificate.`nAdd -useSSL and -installCertificateOnHost to use a self signed certificate and install it in trusted root certifications on the host."
+            }
+        }
+        catch {}
+    }
+
+    if ($imageName -like 'microsoft/dynamics-nav:*' -or $imageName -like 'microsoft/bcsandbox:*') {
+        throw "ERROR: Images are no longer available on Docker hub. You should use artifacts instead of specific docker images."
     }
 
     if ($Credential -eq $null -or $credential -eq [System.Management.Automation.PSCredential]::Empty) {
@@ -298,7 +366,7 @@ function New-BcContainer {
             } elseif (!(Test-Path $_)) {
                 throw "Script directory or file $_ does not exist"
             }
-        } elseif ($_ -isnot [Hashtable]) {
+        } elseif ($_ -isnot [Hashtable] -and $_ -isnot [PSCustomObject]) {
             throw "Illegal value in myScripts"
         }
     }
@@ -314,7 +382,12 @@ function New-BcContainer {
     $hostOs = "Unknown/Insider build"
     $bestGenericImageName = Get-BestGenericImageName -onlyMatchingBuilds
 
-    if ($os.BuildNumber -eq 19041) { 
+    $isServerHost = $os.ProductType -eq 3
+
+    if ($os.BuildNumber -eq 19042) { 
+        $hostOs = "20H2"
+    }
+    elseif ($os.BuildNumber -eq 19041) { 
         $hostOs = "2004"
     }
     elseif ($os.BuildNumber -eq 18363) { 
@@ -324,7 +397,12 @@ function New-BcContainer {
         $hostOs = "1903"
     }
     elseif ($os.BuildNumber -eq 17763) { 
-        $hostOs = "ltsc2019"
+        if ($isServerHost) {
+            $hostOs = "ltsc2019"
+        }
+        else {
+            $hostOs = "1809"
+        }
     }
     elseif ($os.BuildNumber -eq 17134) { 
         $hostOs = "1803"
@@ -336,7 +414,12 @@ function New-BcContainer {
         $hostOs = "1703"
     }
     elseif ($os.BuildNumber -eq 14393) {
-        $hostOs = "ltsc2016"
+        if ($isServerHost) {
+            $hostOs = "ltsc2016"
+        }
+        else {
+            $hostOs = "1607"
+        }
     }
     
     Write-Host "BcContainerHelper is version $BcContainerHelperVersion"
@@ -347,7 +430,6 @@ function New-BcContainer {
         Write-Host "BcContainerHelper is not running as administrator"
     }
 
-    $isServerHost = $os.ProductType -eq 3
     Write-Host "Host is $($os.Caption) - $hostOs"
 
     $dockerService = (Get-Service docker -ErrorAction Ignore)
@@ -371,14 +453,14 @@ function New-BcContainer {
 
     $myClientVersion = [System.Version]"0.0.0"
     if (!(([System.Version]::TryParse($dockerClientVersion, [ref]$myClientVersion)) -and ($myClientVersion -ge ([System.Version]"18.03.0")))) {
-        Write-Host -ForegroundColor Red "WARNING: Microsoft container registries will switch to TLS v1.2 very soon and your version of Docker does not support this. You should install a new version of docker asap (version 18.03.0 or later)"
+        Write-Host -ForegroundColor Yellow "WARNING: Microsoft container registries will switch to TLS v1.2 very soon and your version of Docker does not support this. You should install a new version of docker asap (version 18.03.0 or later)"
     }
 
     Write-Host "Docker Server Version is $dockerServerVersion"
 
     $doNotGetBestImageName = $false
     $skipDatabase = $false
-    if ($bakFile -ne "" -or $databaseServer -ne "" -or $databaseInstance -ne "" -or $databaseName -ne "") {
+    if ($bakFile -ne "" -or $databaseServer -ne "" -or $databaseInstance -ne "" -or "$databasePrefix$databaseName" -ne "") {
         $skipDatabase = $true
     }
 
@@ -388,182 +470,101 @@ function New-BcContainer {
     if ($artifactUrl) {
         # When using artifacts, you always use best container os - no need to replatform
         $useBestContainerOS = $false
+
+        $artifactPaths = Download-Artifacts -artifactUrl $artifactUrl -includePlatform -forceRedirection:$alwaysPull
+        $appArtifactPath = $artifactPaths[0]
+        $platformArtifactPath = $artifactPaths[1]
+
+        $appManifestPath = Join-Path $appArtifactPath "manifest.json"
+        $appManifest = Get-Content $appManifestPath | ConvertFrom-Json
+
+        $bcstyle = "onprem"
+        if ($appManifest.PSObject.Properties.name -eq "isBcSandbox") {
+            if ($appManifest.isBcSandbox) {
+                $bcstyle = "sandbox"
+                if (!($PSBoundParameters.ContainsKey('multitenant')) -and !$skipDatabase) {
+                    $multitenant = $bcContainerHelperConfig.sandboxContainersAreMultitenantByDefault
+                }
+            }
+        }
+
+        if ($databaseServer -ne "" -and $databasePrefix -ne "" -and $databaseName -ne "" -and $replaceExternalDatabases) {
+            if ($bcstyle = "sandbox" -and (!($PSBoundParameters.ContainsKey('multitenant')))) {
+                $multitenant = $bcContainerHelperConfig.sandboxContainersAreMultitenantByDefault
+            }
+            Remove-BcDatabase -databaseServer $databaseServer -databaseInstance $databaseInstance -databaseName "$($databasePrefix)%"
+            Restore-BcDatabaseFromArtifacts -artifactUrl $artifactUrl -databaseServer $databaseServer -databaseInstance $databaseInstance -databasePrefix $databasePrefix -databaseName $databaseName -multitenant:$multitenant -async
+            $successFileName = Join-Path $bcContainerHelperConfig.containerHelperFolder "$($databasePrefix)databasescreated.txt"
+            $myscripts += @( @{ "SetupDatabase.ps1" = "if (!(Test-Path ""$successFileName"")) { Write-Host -NoNewline 'Waiting for database creation to finish'; while (!(Test-Path ""$successFileName"")) { Start-Sleep -seconds 1; Write-Host -NoNewLine '.' }; Write-Host }; . 'c:\run\setupDatabase.ps1'" } ) `
+        }
     }
 
-    if ($imageName -eq "") {
-        Write-Host "Fetching all docker images"
-        $allImages = @(docker images --format "{{.Repository}}:{{.Tag}}")
-    }
-    else {
+    Write-Host "Fetching all docker images"
+    $allImages = @(docker images --format "{{.Repository}}:{{.Tag}}")
+
+    if ($imageName -ne "") {
+
         if ($artifactUrl -eq "") {
 
-            Write-Host "Fetching all docker images"
-            $allImages = @(docker images --format "{{.Repository}}:{{.Tag}}")
-
             if ($imageName -like "mcr.microsoft.com/*") {
-                Write-Host -ForegroundColor Red "WARNING: You are running specific Docker images from mcr.microsoft.com. These images will no longer be updated, you should switch to user Docker artifacts. See https://freddysblog.com/2020/07/05/july-updates-are-out-they-are-the-last-on-premises-docker-images/"
+                Write-Host -ForegroundColor Red "WARNING: You are running specific Docker images from mcr.microsoft.com. These images will no longer be updated and will be removed on January 2nd 2021, you should switch to user Docker artifacts. See https://freddysblog.com/2020/07/05/july-updates-are-out-they-are-the-last-on-premises-docker-images/"
             }
             if ($imageName -like "bcinsider.azurecr.io/*") {
-                Write-Host -ForegroundColor Red "WARNING: You are running specific Docker images from bcinsider.azurecr.io. These images will no longer be updated, you should switch to user Docker artifacts. See https://freddysblog.com/2020/07/05/july-updates-are-out-they-are-the-last-on-premises-docker-images/"
+                Write-Host -ForegroundColor Red "WARNING: You are running specific Docker images from bcinsider.azurecr.io. These images will no longer be updated and will be removed on January 2nd 2021, you should switch to user Docker artifacts. See https://freddysblog.com/2020/07/05/july-updates-are-out-they-are-the-last-on-premises-docker-images/"
             }
         }
         else {
-            $autotag = $false
             Write-Host "ArtifactUrl and ImageName specified"
-            if (!$imageName.Contains(':')) {
-                $appUri = [Uri]::new($artifactUrl)
-                $imageName += ":$($appUri.AbsolutePath.Replace('/','-').TrimStart('-'))"
-                $autotag = $true
+
+            $mtImage = $multitenant
+            if ($useNewDatabase -or $useCleanDatabase) {
+                $mtImage = $false
             }
 
-            $buildMutexName = "img-$imageName"
-            $buildMutex = New-Object System.Threading.Mutex($false, $buildMutexName)
-            try {
-                try {
-                    if (!$buildMutex.WaitOne(1000)) {
-                        Write-Host "Waiting for other process building image $imageName"
-                        $buildMutex.WaitOne() | Out-Null
-                        Write-Host "Other process completed download"
-                    }
-                }
-                catch [System.Threading.AbandonedMutexException] {
-                   Write-Host "Other process terminated abnormally"
-                }
-    
-                Write-Host "Fetching all docker images"
-                $allImages = @(docker images --format "{{.Repository}}:{{.Tag}}")
+            $imageName = New-Bcimage `
+                -artifactUrl $artifactUrl `
+                -imageName $imagename `
+                -isolation $isolation `
+                -baseImage $useGenericImage `
+                -memory $memoryLimit `
+                -skipDatabase:$skipDatabase `
+                -multitenant:$mtImage `
+                -addFontsFromPath $addFontsFromPath `
+                -licenseFile $licensefile `
+                -includeTestToolkit:$includeTestToolkit `
+                -includeTestFrameworkOnly:$includeTestFrameworkOnly `
+                -includeTestLibrariesOnly:$includeTestLibrariesOnly `
+                -includePerformanceToolkit:$includePerformanceToolkit `
+                -skipIfImageAlreadyExists:(!$forceRebuild) `
+                -allImages $allImages
 
-                $appArtifactPath = Download-Artifacts -artifactUrl $artifactUrl -forceRedirection:$alwaysPull
-                $appManifestPath = Join-Path $appArtifactPath "manifest.json"
-                $appManifest = Get-Content $appManifestPath | ConvertFrom-Json
-
-                if ($appManifest.PSObject.Properties.name -eq "isBcSandbox") {
-                    if ($appManifest.isBcSandbox) {
-                        if (!($PSBoundParameters.ContainsKey('multitenant')) -and !$skipDatabase) {
-                            $multitenant = $bcContainerHelperConfig.sandboxContainersAreMultitenantByDefault
-                        }
-                    }
-                }
-                $mtImage = $multitenant
-                if ($useNewDatabase -or $useCleanDatabase) {
-                    $mtImage = $false
-                }
-
-                $dbstr = ""
-                if ($skipDatabase) {
-                    if ($autotag) { $imageName += "-nodb" }
-                    $dbstr = " without database"
-                }
-                $mtstr = ""
-                if ($mtImage) {
-                    if ($autotag) { $imageName += "-mt" }
-                    $mtstr = " multitenant"
-                }
-
-                if ($allImages | Where-Object { $_ -eq $imageName }) {
-                    try {
-                        Write-Host "Image $imageName already exists"
-                        $inspect = docker inspect $imageName | ConvertFrom-Json
-            
-                        if ($useGenericImage -eq "") {
-                            $useGenericImage = Get-BestGenericImageName
-                        }
-            
-                        $labels = Get-BcContainerImageLabels -imageName $useGenericImage
-            
-                        $imageArtifactUrl = ($inspect.config.env | ? { $_ -like "artifactUrl=*" }).SubString(12).Split('?')[0]
-                        if ($imageArtifactUrl -ne $artifactUrl.Split('?')[0]) {
-                            Write-Host "Image $imageName was build with artifactUrl $imageArtifactUrl, should be $($artifactUrl.Split('?')[0])"
-                            $forceRebuild = $true
-                        }
-                        if ($inspect.Config.Labels.version -ne $appManifest.Version) {
-                            Write-Host "Image $imageName was build with version $($inspect.Config.Labels.version), should be $($appManifest.Version)"
-                            $forceRebuild = $true
-                        }
-                        elseif ($inspect.Config.Labels.Country -ne $appManifest.Country) {
-                            Write-Host "Image $imageName was build with version $($inspect.Config.Labels.version), should be $($appManifest.Version)"
-                            $forceRebuild = $true
-                        }
-                        elseif ($inspect.Config.Labels.osversion -ne $labels.osversion) {
-                            Write-Host "Image $imageName was build for OS Version $($inspect.Config.Labels.osversion), should be $($labels.osversion)"
-                            $forceRebuild = $true
-                        }
-                        elseif ($inspect.Config.Labels.tag -ne $labels.tag) {
-                            Write-Host "Image $imageName has generic Tag $($inspect.Config.Labels.tag), should be $($labels.tag)"
-                            $forceRebuild = $true
-                        }
-                       
-                        if (($inspect.Config.Labels.PSObject.Properties.Name -eq "Multitenant") -and ($inspect.Config.Labels.Multitenant -eq "Y")) {
-                            if (!$mtImage) {
-                                Write-Host "Image $imageName was build multi tenant, should have been single tenant"
-                                $forceRebuild = $true
-                            }
-                        }
-                        else {
-                            if ($mtImage) {
-                                Write-Host "Image $imageName was build single tenant, should have been multi tenant"
-                                $forceRebuild = $true
-                            }
-                        }
-             
-                        if (($inspect.Config.Labels.PSObject.Properties.Name -eq "SkipDatabase") -and ($inspect.Config.Labels.SkipDatabase -eq "Y")) {
-                            if (!$skipdatabase) {
-                                Write-Host "Image $imageName was build without a database, should have a database"
-                                $forceRebuild = $true
-                            }
-                        }
-                        else {
-                            # Do not rebuild if database is there, just don't use it
-                        }
-                    }
-                    catch {
-                        $forceRebuild = $true
-                    }
-                }
-                else {
-                    Write-Host "Image $imageName doesn't exist"
-                    $forceRebuild = $true
-                }
-                if ($forceRebuild) {
-                    Write-Host "Building$mtstr image $imageName based on $($artifactUrl.Split('?')[0])$dbstr"
-                    $startTime = [DateTime]::Now
-                    New-Bcimage `
-                        -artifactUrl $artifactUrl `
-                        -imageName $imagename `
-                        -isolation $isolation `
-                        -baseImage $useGenericImage `
-                        -memory $memoryLimit `
-                        -skipDatabase:$skipDatabase `
-                        -multitenant:$mtImage `
-                        -addFontsFromPath $addFontsFromPath `
-                        -licenseFile $licensefile `
-                        -includeTestToolkit:$includeTestToolkit `
-                        -includeTestFrameworkOnly:$includeTestFrameworkOnly `
-                        -includeTestLibrariesOnly:$includeTestLibrariesOnly `
-                        -includePerformanceToolkit:$includePerformanceToolkit
-
-                    $timespend = [Math]::Round([DateTime]::Now.Subtract($startTime).Totalseconds)
-                    Write-Host "Building image took $timespend seconds"
-                    if (-not ($allImages | Where-Object { $_ -eq $imageName })) {
-                        $allImages += $imageName
-                    }
-                }
-                $artifactUrl = ""
-                $alwaysPull = $false
-                $useGenericImage = ""
-                $doNotGetBestImageName = $true
+            if (-not ($allImages | Where-Object { $_ -eq $imageName })) {
+                $allImages += $imageName
             }
-            finally {
-                $buildMutex.ReleaseMutex()
-            }
+
+            $artifactUrl = ""
+            $alwaysPull = $false
+            $useGenericImage = ""
+            $doNotGetBestImageName = $true
         }
     }
 
     if (!($PSBoundParameters.ContainsKey('useTraefik'))) {
         $traefikForBcBasePath = "c:\programdata\bccontainerhelper\traefikforbc"
         if (Test-Path -Path (Join-Path $traefikForBcBasePath "traefik.txt") -PathType Leaf) {
-            Write-Host "WARNING: useTraefik not specified, but Traefik container was initialized, using Traefik. Specify -useTraefik:`$false if you do NOT want to use Traefik."
-            $useTraefik = $true
+            if (-not $PublicDnsName) {
+                $wwwRootPath = Get-WWWRootPath
+                if ($wwwRootPath) {
+                    $hostNameTxtFile = Join-Path $wwwRootPath "hostname.txt"
+                    if ((Test-Path $hostNameTxtFile) -and -not $PublicDnsName) {
+                        $PublicDnsName = Get-Content -Path $hostNameTxtFile
+                    }
+                }
+            }
+            if ($publicDnsName) {
+                Write-Host -ForegroundColor Yellow "WARNING: useTraefik not specified, but Traefik container was initialized, using Traefik. Specify -useTraefik:`$false if you do NOT want to use Traefik."
+                $useTraefik = $true
+            }
         }
     }
 
@@ -579,7 +580,7 @@ function New-BcContainer {
         }
 
         if ($PublishPorts.Count -gt 0 -or
-            $WebClientPort -or $FileSharePort -or $ManagementServicesPort -or $ClientServicesPort -or 
+            $WebClientPort -or $FileSharePort -or $ManagementServicesPort -or 
             $SoapServicesPort -or $ODataServicesPort -or $DeveloperServicesPort) {
             throw "When using Traefik, all external communication comes in through port 443, so you can't change the ports"
         }
@@ -591,9 +592,12 @@ function New-BcContainer {
             Write-Host "Enabling SSL as otherwise all clients will see mixed HTTP / HTTPS request, which will cause problems e.g. on the mobile and modern windows clients"
             $useSSL = $true
         }
-
-        if ((Test-Path "C:\inetpub\wwwroot\hostname.txt") -and -not $PublicDnsName) {
-            $PublicDnsName = Get-Content -Path "C:\inetpub\wwwroot\hostname.txt" 
+        $wwwRootPath = Get-WWWRootPath
+        if ($wwwRootPath) {
+            $hostNameTxtFile = Join-Path $wwwRootPath "hostname.txt"
+            if ((Test-Path $hostNameTxtFile) -and -not $PublicDnsName) {
+                $PublicDnsName = Get-Content -Path $hostNameTxtFile
+            }
         }
         if (-not $PublicDnsName) {
             throw "Using Traefik only makes sense if you allow external access, so you have to provide the public DNS name (param -PublicDnsName)"
@@ -709,6 +713,10 @@ function New-BcContainer {
         $parameters += "--env clickonce=Y"
     }
 
+    if ($applicationInsightsKey) {
+        $parameters += "--env applicationInsightsInstrumentationKey=$applicationInsightsKey"
+    }
+
     if ($WebClientPort) {
         $parameters += "--env WebClientPort=$WebClientPort"
     }
@@ -780,7 +788,7 @@ function New-BcContainer {
 
     if ($artifactUrl) {
 
-        $parameters += "--volume $($downloadsPath):c:\dl"
+        $parameters += "--volume ""$($downloadsPath):c:\dl"""
 
         $artifactPaths = Download-Artifacts -artifactUrl $artifactUrl -includePlatform -forceRedirection:$alwaysPull
         $appArtifactPath = $artifactPaths[0]
@@ -937,6 +945,9 @@ function New-BcContainer {
     elseif ("$containerOsVersion".StartsWith('10.0.19041.')) {
         $containerOs = "2004"
     }
+    elseif ("$containerOsVersion".StartsWith('10.0.19042.')) {
+        $containerOs = "20H2"
+    }
     else {
         $containerOs = "unknown"
     }
@@ -1052,6 +1063,9 @@ function New-BcContainer {
         elseif ("$containerOsVersion".StartsWith('10.0.19041.')) {
             $containerOs = "2004"
         }
+        elseif ("$containerOsVersion".StartsWith('10.0.19042.')) {
+            $containerOs = "20H2"
+        }
         else {
             $containerOs = "unknown"
         }
@@ -1075,17 +1089,17 @@ function New-BcContainer {
                 }
                 else {
                     $isolation = "process"
-                    Write-Host "WARNING: Host OS and Base Image Container OS doesn't match and Hyper-V is not installed. If you encounter issues, you could try to install Hyper-V."
+                    Write-Host -ForegroundColor Yellow "WARNING: Host OS and Base Image Container OS doesn't match and Hyper-V is not installed. If you encounter issues, you could try to install Hyper-V."
                 }
             }
             else {
                 $isolation = "hyperv"
-                Write-Host "WARNING: Host OS and Base Image Container OS doesn't match, defaulting to hyperv. If you do not have Hyper-V installed or you encounter issues, you could try to specify -isolation process"
+                Write-Host -ForegroundColor Yellow "WARNING: Host OS and Base Image Container OS doesn't match, defaulting to hyperv. If you do not have Hyper-V installed or you encounter issues, you could try to specify -isolation process"
             }
 
         }
         elseif ($isolation -eq "process") {
-            Write-Host "WARNING: Host OS and Base Image Container OS doesn't match and process isolation is specified. If you encounter issues, you could try to specify -isolation hyperv"
+            Write-Host -ForegroundColor Yellow "WARNING: Host OS and Base Image Container OS doesn't match and process isolation is specified. If you encounter issues, you could try to specify -isolation hyperv"
         }
     }
     Write-Host "Using $isolation isolation"
@@ -1174,10 +1188,17 @@ function New-BcContainer {
                     Copy-Item -Path $_ -Destination $myFolder -Force
                 }
             }
-        } else {
+        }
+        elseif ($_ -is [hashtable]) {
             $hashtable = $_
             $hashtable.Keys | ForEach-Object {
-                Set-Content -Path (Join-Path $myFolder $_) -Value $hashtable[$_]
+                Add-Content -Path (Join-Path $myFolder $_) -Value "`n$($hashtable[$_])`n"
+            }
+        }
+        elseif ($_ -is [PSCustomObject]) {
+            $psobj = $_
+            $psobj.PSObject.Properties | ForEach-Object {
+                Add-Content -Path (Join-Path $myFolder $_.Name) -Value "`n$($_.Value)`n"
             }
         }
     }
@@ -1210,7 +1231,10 @@ function New-BcContainer {
             throw "Database backup $bakFile doesn't exist"
         }
         
-        if (-not $bakFile.StartsWith($hostHelperFolder, [StringComparison]::OrdinalIgnoreCase)) {
+        if ($bakFile.StartsWith($hostHelperFolder, [StringComparison]::OrdinalIgnoreCase)) {
+            $bakFile = "$containerHelperFolder$($bakFile.Substring($hostHelperFolder.Length))"
+        }
+        else {
             $containerBakFile = Join-Path $containerFolder "database.bak"
             Copy-Item -Path $bakFile -Destination $containerBakFile
             $bakFile = $containerBakFile
@@ -1240,8 +1264,8 @@ function New-BcContainer {
                 throw "You must specify a license file when creating a AL Development container with this version."
             }
             $containerlicenseFile = ""
-        } elseif ($licensefile.StartsWith("https://", "OrdinalIgnoreCase") -or $licensefile.StartsWith("http://", "OrdinalIgnoreCase")) {
-            Write-Host "Using license file $licenseFile"
+        } elseif ($licensefile -like "https://*" -or $licensefile -like "http://*") {
+            Write-Host "Using license file $($licenseFile.Split('?')[0])"
             $licensefileUri = $licensefile
             $licenseFile = "$myFolder\license.flf"
             Download-File -sourceUrl $licenseFileUri -destinationFile $licenseFile
@@ -1277,7 +1301,7 @@ function New-BcContainer {
                    )
 
     if ("$memoryLimit" -eq "" -and $isolation -eq "hyperv") {
-        $memoryLimit = "4G"
+        $memoryLimit = "8G"
     }
 
     $SqlServerMemoryLimit = 0
@@ -1311,8 +1335,8 @@ function New-BcContainer {
         $parameters += "--env enableApiServices=Y"
     }
 
-    if ("$databaseName" -ne "") {
-        $parameters += "--env databaseName=""$databaseName"""
+    if ("$databasePrefix$databaseName" -ne "") {
+        $parameters += "--env databaseName=""$databasePrefix$databaseName"""
     }
 
     if ("$authenticationEMail" -ne "") {
@@ -1411,7 +1435,7 @@ if (!(Test-Path "c:\navpfiles\*")) {
     . "c:\run\setupWebClient.ps1"
 }
 catch {
-    Write-Host "WARNING: SetupWebClient failed, retrying in 10 seconds"
+    Write-Host -ForegroundColor Yellow "WARNING: SetupWebClient failed, retrying in 10 seconds"
     Start-Sleep -seconds 10
     . "c:\run\setupWebClient.ps1"
 }
@@ -1683,7 +1707,7 @@ if (-not `$restartingInstance) {
                 }
             }
             catch {
-                Write-Host "WARNING: Unable to set TimeZone to $TimeZoneId, TimeZone is $OldTimeZoneId"
+                Write-Host -ForegroundColor Yellow "WARNING: Unable to set TimeZone to $TimeZoneId, TimeZone is $OldTimeZoneId"
             }
         } -argumentList $TimeZoneId
     }
@@ -1815,7 +1839,13 @@ if (-not `$restartingInstance) {
         $databaseInstance = $customConfig.DatabaseInstance
         $databaseName = $customConfig.DatabaseName
         $databaseServer = $customConfig.DatabaseServer
-        if ($databaseServer -eq "localhost") {
+        if ($databaseServer -eq "host.containerhelper.internal") {
+            $databaseServer = "localhost"
+            if ($databaseInstance) {
+                $databaseServer += "\$databaseInstance"
+            }
+        } 
+        elseif ($databaseServer -eq "localhost") {
             $databaseServer = "$containerName"
             if (("$databaseInstance" -ne "") -and ("$databaseInstance" -ne "SQLEXPRESS")) {
                 $databaseServer += "\$databaseInstance"
@@ -1946,7 +1976,7 @@ if (-not `$restartingInstance) {
 
             $serviceTierFolder = (Get-Item "C:\Program Files\Microsoft Dynamics NAV\*\Service").FullName
 
-            $paths = @("C:\Windows\assembly", $serviceTierFolder)
+            $paths = @("C:\Windows\assembly", "C:\Windows\Microsoft.NET\assembly", $serviceTierFolder)
 
             $rtcFolder = "C:\Program Files (x86)\Microsoft Dynamics NAV\*\RoleTailored Client"
             if (Test-Path $rtcFolder -PathType Container) {
@@ -1959,8 +1989,16 @@ if (-not `$restartingInstance) {
             $paths += "C:\Program Files (x86)\Open XML SDK"
 
             $paths | % {
+                $localPath = Join-Path $dotnetAssembliesFolder ([System.IO.Path]::GetFileName($_))
+                if (!(Test-Path $localPath)) {
+                    New-Item -Path $localPath -ItemType Directory -Force | Out-Null
+                }
                 Write-Host "Copying DLLs from $_ to assemblyProbingPath"
-                Copy-Item -Path $_ -Destination $dotnetAssembliesFolder -Force -Recurse -Filter "*.dll"
+                Get-ChildItem -Path $_ -Filter *.dll -Recurse | % {
+                    if (!(Test-Path (Join-Path $localPath $_.Name))) {
+                        Copy-Item -Path $_.FullName -Destination $localPath -Force -ErrorAction SilentlyContinue
+                    }
+                }
             }
 
             $serviceTierAddInsFolder = Join-Path $serviceTierFolder "Add-ins"
@@ -1969,7 +2007,7 @@ if (-not `$restartingInstance) {
                     new-item -itemtype symboliclink -path $ServiceTierAddInsFolder -name "RTC" -value (Get-Item $RtcFolder).FullName | Out-Null
                 }
             }
-        } -argumentList $dotnetAssembliesFolder
+        } -argumentList (Get-BcContainerPath -containerName $containerName -path $dotnetAssembliesFolder)
     }
 
     if (($useCleanDatabase -or $useNewDatabase) -and !$restoreBakFolder) {
@@ -1984,7 +2022,7 @@ if (-not `$restartingInstance) {
                 $databaseServer = $customConfig.SelectSingleNode("//appSettings/add[@key='DatabaseServer']").Value
                 $databaseInstance = $customConfig.SelectSingleNode("//appSettings/add[@key='DatabaseInstance']").Value
                 $databaseName = $customConfig.SelectSingleNode("//appSettings/add[@key='DatabaseName']").Value
-                
+
                 Set-NavserverInstance -ServerInstance $serverInstance -stop
                 Copy-NavDatabase -SourceDatabaseName $databaseName -DestinationDatabaseName "tenant"
                 Remove-NavDatabase -DatabaseName $databaseName
@@ -1996,8 +2034,28 @@ if (-not `$restartingInstance) {
                 Set-NAVServerConfiguration -ServerInstance $ServerInstance -KeyName "Multitenant" -KeyValue "true" -ApplyTo ConfigFile
                 Set-NavserverInstance -ServerInstance $serverInstance -start
             }
-            New-BcContainerTenant -containerName $containerName -tenantId default
+            $allowAppDatabaseWrite = ($additionalparameters | Where-Object { $_ -like "*defaultTenantHasAllowAppDatabaseWrite=Y" }) -ne $null
+            New-BcContainerTenant -containerName $containerName -tenantId default -allowAppDatabaseWrite:$allowAppDatabaseWrite
         }
+    }
+    elseif ($artifactUrl -ne "" -and $databaseServer -ne "" -and $databasePrefix -ne "" -and $databaseName -ne "" -and $replaceExternalDatabases) {
+        if ($multitenant) {
+            $allowAppDatabaseWrite = ($additionalparameters | Where-Object { $_ -like "*defaultTenantHasAllowAppDatabaseWrite=Y" }) -ne $null
+            New-NavContainerTenant `
+                -containerName $containerName `
+                -tenantId 'default' `
+                -sqlCredential $databaseCredential `
+                -sourceDatabase "$($databasePrefix)tenant" `
+                -destinationDatabase "$($databasePrefix)default" `
+                -allowAppDatabaseWrite:$allowAppDatabaseWrite
+        }
+        
+        New-NavContainerNavUser `
+            -containerName $containerName `
+            -tenant 'default' `
+            -Credential $credential `
+            -PermissionSetId 'SUPER' `
+            -ChangePasswordAtNextLogOn:$false
     }
 
     if (!$restoreBakFolder -and $finalizeDatabasesScriptBlock) {

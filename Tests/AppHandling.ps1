@@ -3,6 +3,14 @@
     $appPublisher = "Cronus Denmark A/S"
     $appName = "Hello ÆØÅ"
     $appVersion = "1.0.0.0"
+    $bcAppId = "cb99d78b-f9db-4a1e-822a-0c9c444535df"
+
+    It 'Add-GitToAlProjectFolder' {
+        #TODO
+    }
+    It 'Clean-BcContainerDatabase' {
+        #TODO
+    }
 
     It 'Compile-AppInNavContainer' {
         Copy-Item -Path (Join-Path $PSScriptRoot "nav-app") -Destination $navContainerPath -Recurse -Force
@@ -45,6 +53,12 @@
     It 'Convert-ALCOutputToAzureDevOps' {
         #TODO
     }
+    It 'Copy-AlSourceFiles' {
+        #TODO
+    }
+    It 'Create-AlProjectFolderFromNavContainer' {
+        #TODO
+    }
     It 'Extract-AppFileToFolder (nav app)' {
         $navAppFileName = "$($appPublisher)_$($appName)_$($appVersion).app".Split([System.IO.Path]::GetInvalidFileNameChars()) -join ''
         $navAppFile = Join-Path $navContainerPath "nav-app\output\$navAppFileName"
@@ -56,17 +70,24 @@
         $bcAppFile = Join-Path $bcContainerPath "bc-app\output\$bcAppFileName"
         Extract-AppFileToFolder $bcAppFile -appFolder (Join-Path $bcContainerPath "bc-app2")
         (Get-ChildItem -Path (Join-Path $bcContainerPath "bc-app\*.al") -Recurse).Count | Should -Be (Get-ChildItem -Path (Join-Path $bcContainerPath "bc-app2\*.al") -Recurse).Count
-
     }
     It 'Publish-NavContainerApp' {
         $navAppFileName = "$($appPublisher)_$($appName)_$($appVersion).app".Split([System.IO.Path]::GetInvalidFileNameChars()) -join ''
         $navAppFile = Join-Path $navContainerPath "nav-app\output\$navAppFileName"
         Publish-NavContainerApp -containerName $navContainerName -appFile $navAppFile -skipVerification
     }
+    It 'Sign-BcContainerApp' {
+        $bcAppFileName = "$($appPublisher)_$($appName)_$($appVersion).app".Split([System.IO.Path]::GetInvalidFileNameChars()) -join ''
+        $bcAppFile = Join-Path $bcContainerPath "bc-app\output\$bcAppFileName"
+        $certFile = Join-Path $bcContainerPath "myCert.pfx"
+        New-SelfSignedCertificate –Type CodeSigningCert –Subject “CN=FreddyK” | Export-PfxCertificate -FilePath $certFile -Password $Credential.Password
+        Sign-BcContainerApp -containerName $bcContainerName -appFile $bcAppFile -pfxFile $certFile -pfxPassword $Credential.Password
+        Import-PfxCertificateToBcContainer -containerName $bcContainerName -pfxCertificatePath $certFile -pfxPassword $Credential.Password -CertificateStoreLocation "Cert:\LocalMachine\Root"
+    }
     It 'Publish-BcContainerApp' {
         $bcAppFileName = "$($appPublisher)_$($appName)_$($appVersion).app".Split([System.IO.Path]::GetInvalidFileNameChars()) -join ''
         $bcAppFile = Join-Path $bcContainerPath "bc-app\output\$bcAppFileName"
-        Publish-BcContainerApp -containerName $bcContainerName -appFile $bcAppFile -skipVerification
+        Publish-BcContainerApp -containerName $bcContainerName -appFile $bcAppFile
     }
     It 'Sync-NavContainerApp' {
         Sync-NavContainerApp -containerName $navContainerName -appName $appName -appVersion $appVersion
@@ -95,11 +116,11 @@
         #TODO
     }
     It 'Get-TestsFromNavContainer' {
-        $tests = Get-TestsFromNavContainer -containerName $bcContainerName -credential $credential
+        $tests = Get-TestsFromNavContainer -containerName $navContainerName -credential $credential
         $tests.Tests | Should -Contain 'WorkingTest'
     }
     It 'Get-TestsFromBcContainer' {
-        $tests = Get-TestsFromBcContainer -containerName $bcContainerName -credential $credential
+        $tests = Get-TestsFromBcContainer -containerName $bcContainerName -credential $credential -extensionId $bcAppId
         $tests.Tests | Should -Contain 'WorkingTest'
     }
     It 'Install-NAVSipCryptoProviderFromNavContainer' {
@@ -119,12 +140,9 @@
     }
     It 'Run-TestsInBcContainer' {
         $testResultsFile = Join-Path $bcContainerPath "TestResults.xml"
-        Run-TestsInBcContainer -containerName $bcContainerName -credential $credential -detailed -XUnitResultFileName $testResultsFile
+        Run-TestsInBcContainer -containerName $bcContainerName -credential $credential -detailed -XUnitResultFileName $testResultsFile -extensionId $bcAppId
         [xml]$testResults = Get-Content $testResultsFile
         $testResults.assemblies.assembly.passed | Should -Be $testResults.assemblies.assembly.total
-    }
-    It 'Sign-NavContainerApp' {
-        #TODO
     }
     It 'Start-NavContainerAppDataUpgrade' {
         #TODO
@@ -156,6 +174,7 @@
                 "table"          { "Tables\$($type) $($id) - $($name).al" }
                 "tableexension"  { "Tables\$($type) $($id) - $($name).al" }
                 "codeunit"       { "Codeunits\$($type) $($id) - $($name).al" }
+                "interface"      { "Interfaces\$($type) $($id) - $($name).al" }
                 "query"          { "Queries\$($type) $($id) - $($name).al" }
                 "report"         { "Reports\$($type) $($id) - $($name).al" }
                 "xmlport"        { "XmlPorts\$($type) $($id) - $($name).al" }
@@ -197,7 +216,7 @@
     It 'Get/RunTests for all versions' {
         $runTestsContainerName = "runtests"
 
-        9,10,11,14,15,16 | % {
+        9,10,11,14,15,16,17 | % {
 
             
             $runTestsInVersion  = $_
@@ -218,8 +237,7 @@
                             -Credential $credential `
                             -updateHosts `
                             -licenseFile $licenseFile `
-                            -includeTestToolkit `
-                            -useBestContainerOS
+                            -includeTestToolkit
 
             $useCALTestFwk = $false
             if ($runTestsInVersion -lt 12) {
@@ -229,8 +247,8 @@
                 $useCALTestFwk = $true
             }
             elseif ($runTestsInVersion -eq 14) {
-                Copy-Item -Path (Join-Path $PSScriptRoot "inserttests") -Destination "c:\programdata\bccontainerhelper\Extensions\$runTestsContainerName" -Recurse -Force
-                $appProjectFolder = Join-Path "c:\programdata\bccontainerhelper\Extensions\$runTestsContainerName" "inserttests"
+                Copy-Item -Path (Join-Path $PSScriptRoot "inserttests") -Destination (Join-Path $bcContainerHelperConfig.hostHelperFolder "Extensions\$runTestsContainerName") -Recurse -Force
+                $appProjectFolder = Join-Path (Join-Path $bcContainerHelperConfig.hostHelperFolder "Extensions\$runTestsContainerName") "inserttests"
                 Compile-AppInBCContainer -containerName $runTestsContainerName -credential $credential -appProjectFolder $appProjectFolder -appOutputFolder $appProjectFolder -appName "inserttests.app" -UpdateSymbols
                 Publish-NavContainerApp -containerName $runTestsContainerName -appFile (Join-Path $appProjectFolder "inserttests.app") -skipVerification -sync -install
                 $useCALTestFwk = $true
@@ -246,7 +264,7 @@
             $tests.Count | Should -be 2
         
             $first = $true
-            $resultsFile = "c:\programdata\bccontainerhelper\Extensions\$runTestsContainerName\result.xml"
+            $resultsFile = Join-Path $bcContainerHelperConfig.hostHelperFolder "Extensions\$runTestsContainerName\result.xml"
             $tests | % {
                 $allpassed = Run-TestsInBcContainer -containerName $runTestsContainerName `
                                                     -credential $credential `

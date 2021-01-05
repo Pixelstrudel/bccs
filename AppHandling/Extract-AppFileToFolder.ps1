@@ -22,13 +22,19 @@ function Extract-AppFileToFolder {
         throw "The folder specified in ObjectsFolder will be erased, you cannot specify $hostHelperFolder"
     }
 
+    if (!(Test-Path $appFileName)) {
+        throw "The folder specified in ObjectsFolder will be erased, you cannot specify $hostHelperFolder"
+    }
+    $appFileName = (Get-Item $appFileName).FullName
+
     Write-Host "Extracting $appFilename"    
     if (Test-Path $appFolder -PathType Container) {
         Get-ChildItem -Path $appFolder -Include * | Remove-Item -Recurse -Force
     } else {
         New-Item -Path $appFolder -ItemType Directory -Force -ErrorAction Ignore | Out-Null
     }
-    
+   
+
     try {
         $filestream      = [System.IO.File]::OpenRead($appFileName)
         $binaryReader    = [System.IO.BinaryReader]::new($filestream)
@@ -70,9 +76,21 @@ function Extract-AppFileToFolder {
         $filestream.Close()
     }
 
+    "/addin/src/", "/perm/", "/entit/", "/serv/", "/tabledata/", "/replay/", "/migration/" | % {
+        $folder = Join-Path $appFolder $_
+        if (Test-Path $folder) {
+            Get-ChildItem $folder | % {
+                Copy-Item -Path $_.FullName -Destination $appFolder -Recurse -Force
+                Remove-Item -Path $_.FullName -Recurse -Force
+            }
+        }
+    }
+
     if ($generateAppJson) {
         #Set-StrictMode -Off
         $manifest = [xml](Get-Content -path (Join-Path $appFolder "NavxManifest.xml"))
+        $runtime = "$($manifest.Package.App.Attributes | Where-Object { $_.name -eq "Runtime" } | % { $_.Value } )"
+        $application = "$($manifest.Package.App.Attributes | Where-Object { $_.name -eq "Application" } | % { $_.Value } )"
         $appJson = [ordered]@{
             "id" = $manifest.Package.App.Id
             "name" = $manifest.Package.App.Name
@@ -81,23 +99,47 @@ function Extract-AppFileToFolder {
             "brief" = "$($manifest.Package.App.Attributes | Where-Object { $_.name -eq "Brief" } | % { $_.Value } )"
             "description" = "$($manifest.Package.App.Attributes | Where-Object { $_.name -eq "Description" } | % { $_.Value } )"
             "platform" = "$($manifest.Package.App.Attributes | Where-Object { $_.name -eq "Platform" } | % { $_.Value } )"
-            "application" = "$($manifest.Package.App.Attributes | Where-Object { $_.name -eq "Application" } | % { $_.Value } )"
+        }
+        if ($application) {
+            $appJson += @{
+                "application" = $application
+            }
+        }
+        $appJson += [ordered]@{
             "showMyCode" = "$($manifest.Package.App.Attributes | Where-Object { $_.name -eq "ShowMyCode" } | % { $_.Value } )" -eq "True"
-            "runtime" = "$($manifest.Package.App.Attributes | Where-Object { $_.name -eq "Runtime" } | % { $_.Value } )"
+            "runtime" = $runtime
             "logo" = "$($manifest.Package.App.Attributes | Where-Object { $_.name -eq "Logo" } | % { $_.Value } )".TrimStart('/')
             "url" = "$($manifest.Package.App.Attributes | Where-Object { $_.name -eq "Url" } | % { $_.Value } )"
             "EULA" = "$($manifest.Package.App.Attributes | Where-Object { $_.name -eq "EULA" } | % { $_.Value } )"
             "privacyStatement" = "$($manifest.Package.App.Attributes | Where-Object { $_.name -eq "PrivacyStatement" } | % { $_.Value } )"
             "help" = "$($manifest.Package.App.Attributes | Where-Object { $_.name -eq "Help" } | % { $_.Value } )"
+            "target" = "$($manifest.Package.App.Attributes | Where-Object { $_.name -eq "target" } | % { $_.Value } )"
             "screenshots" = @()
             "dependencies" = @()
             "idRanges" = @()
             "features" = @()
         }
+        if ($runtime -ge 5.0)  {
+            $appJson += @{
+                "applicationInsightsKey" = "$($manifest.Package.App.Attributes | Where-Object { $_.name -eq "applicationInsightsKey" } | % { $_.Value } )"
+            }
+        }
+        $contextSensitiveHelpUrl = "$($manifest.Package.App.Attributes | Where-Object { $_.name -eq "contextSensitiveHelpUrl" } | % { $_.Value } )"
+        if ($contextSensitiveHelpUrl) {
+            $appJson += @{
+                "contextSensitiveHelpUrl" = $contextSensitiveHelpUrl
+            }
+        }
         $manifest.Package.ChildNodes | Where-Object { $_.name -eq "Dependencies" } | % { 
             $_.GetEnumerator() | % {
+                if ($runtime -gt 4.1) {
+                    $propname = "id"
+                }
+                else {
+                    $propname = "appId"
+                }
                 $appJson.dependencies += [ordered]@{
-                    "appId" = $_.Id
+                    "$propname" = $_.Id
                     "publisher" = $_.publisher
                     "name" = $_.name
                     "version" = $_.minVersion
@@ -119,6 +161,41 @@ function Extract-AppFileToFolder {
                     if ($feature -eq $_) {
                         $appJson.features += $_
                     }
+                }
+            }
+        }
+        $manifest.Package.ChildNodes | Where-Object { $_.name -eq "SupportedLocales" } | % { 
+            $first = $true
+            $_.GetEnumerator() | % {
+                if ($first) {
+                    $appJson += @{ "supportedLocales" = @() }
+                    $first = $false
+                }
+                $appJson.supportedLocales += @($_.Local)
+            }
+        }
+        if ($runtime -ge 4.0)  {
+            $first = $true
+            $manifest.Package.ChildNodes | Where-Object { $_.name -eq "internalsVisibleTo" } | % { 
+                if ($first) {
+                    $appJson += @{
+                        "internalsVisibleTo" = @()
+                    }
+                }
+                $_.GetEnumerator() | % {
+                    $appJson.internalsVisibleTo += [ordered]@{
+                        "id" = $_.Id
+                        "publisher" = $_.publisher
+                        "name" = $_.name
+                    }
+                }
+            }
+        }
+        if ($runtime -ge 6.0)  {
+            $appJson += @{ "keyVaultUrls" = @() }
+            $manifest.Package.ChildNodes | Where-Object { $_.name -eq "KeyVaultUrls" } | % { 
+                $_.GetEnumerator() | % {
+                    $appJson.keyVaultUrls += @($_.Name)
                 }
             }
         }

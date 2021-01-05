@@ -28,7 +28,9 @@ function New-BcContainerFromDeployFile {
         [string] $licenseFile = "",
         [string] $databaseBackup = "",
         [ValidateSet('Windows', 'NavUserPassword', 'UserPassword', 'AAD')]
-        [string] $auth = "NavUserPassword"
+        [string] $auth = "NavUserPassword",
+        [ValidateSet('process', 'hyperv')]
+        [string] $isolation = "process"
     )
 
     if (Test-Path $file) {
@@ -109,8 +111,7 @@ function New-BcContainerFromDeployFile {
         'includeCSide'             = $true;
         'enableSymbolLoading'      = $true;
         'includeTestToolkit'       = $deploy_testtoolkit;
-		    'isolation'                = 'hyperv';
-		    'memoryLimit'              = '8G';
+        'isolation'                = $isolation
     }
 
     Write-Log $deploy_imageName

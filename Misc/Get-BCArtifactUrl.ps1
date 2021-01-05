@@ -4,7 +4,7 @@
  .Description
   Get a list of available artifact URLs.  It can be used to create a new instance of a Container.
  .Parameter type
-  OnPrem or Sandbox
+  OnPrem or Sandbox (default is Sandbox)
  .Parameter country
   the requested localization of Business Central
  .Parameter version
@@ -19,7 +19,7 @@
     - NextMajor: will return the next major sandbox release (will return empty if no Next Major is available)
     - NextMinor: will return the next minor sandbox release (will return NextMajor when the next release is a major release)
  .Parameter storageAccount
-  The storageAccount that is being used where artifacts are stored (Usually should not be changed).
+  The storageAccount that is being used where artifacts are stored (default is bcartifacts, usually should not be changed).
  .Parameter sasToken
   The token that for accessing protected Azure Blob Storage (like insider builds).  Make sure to set the right storageAccount!
  .Example
@@ -42,7 +42,7 @@ function Get-BCArtifactUrl {
         [String] $sasToken = '',
         [switch] $doNotCheckPlatform
     )
-    
+
     if ($select -eq "Current") {
         if ($storageAccount -ne '' -or $type -eq 'OnPrem' -or $version -ne '') {
             throw 'You cannot specify storageAccount, type=OnPrem or version when selecting Current release'
@@ -98,7 +98,7 @@ function Get-BCArtifactUrl {
                 if (-not $storageAccount.Contains('.')) {
                     $storageAccount += ".azureedge.net"
                 }
-                $BaseUrl = "https://$storageAccount/$($Type.ToLower())/"
+                $BaseUrl = "https://$storageAccount/$($Type.ToLowerInvariant())/"
                 
                 $GetListUrl = $BaseUrl
                 if (!([string]::IsNullOrEmpty($sasToken))) {
@@ -150,10 +150,17 @@ function Get-BCArtifactUrl {
             
                 if (!([string]::IsNullOrEmpty($country))) {
                     # avoid confusion between base and se
-                    $Artifacts = $Artifacts | Where-Object { $_.EndsWith("/$country") -and ($doNotCheckPlatform -or ($Artifacts.Contains("$($_.Split('/')[0])/platform"))) }
+                    $countryArtifacts = $Artifacts | Where-Object { $_.EndsWith("/$country", [System.StringComparison]::InvariantCultureIgnoreCase) -and ($doNotCheckPlatform -or ($Artifacts.Contains("$($_.Split('/')[0])/platform"))) }
+                    if (!$countryArtifacts) {
+                        if (($type -eq "sandbox") -and ($bcContainerHelperConfig.mapCountryCode.PSObject.Properties.Name -eq $country)) {
+                            $country = $bcContainerHelperConfig.mapCountryCode."$country"
+                            $countryArtifacts = $Artifacts | Where-Object { $_.EndsWith("/$country", [System.StringComparison]::InvariantCultureIgnoreCase) -and ($doNotCheckPlatform -or ($Artifacts.Contains("$($_.Split('/')[0])/platform"))) }
+                        }
+                    }
+                    $Artifacts = $countryArtifacts
                 }
                 else {
-                    $Artifacts = $Artifacts | Where-Object { !($_.EndsWith("/platform")) }
+                    $Artifacts = $Artifacts | Where-Object { !($_.EndsWith("/platform", [System.StringComparison]::InvariantCultureIgnoreCase)) }
                 }
             
                 $Artifacts = $Artifacts | Sort-Object { [Version]($_.Split('/')[0]) }

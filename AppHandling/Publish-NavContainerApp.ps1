@@ -12,8 +12,8 @@
   Include this parameter if the app you want to publish is not signed
  .Parameter sync
   Include this parameter if you want to synchronize the app after publishing
-  .Parameter syncMode
-   Specify Add, Clean or Development based on how you want to synchronize the database schema. Default is Add
+ .Parameter syncMode
+  Specify Add, Clean or Development based on how you want to synchronize the database schema. Default is Add
  .Parameter install
   Include this parameter if you want to install the app after publishing
  .Parameter tenant
@@ -32,6 +32,8 @@
   With this parameter, you can specify a hashtable, describring that the specified dependencies in the apps being published should be replaced
  .Parameter showMyCode
   With this parameter you can change or check ShowMyCode in the app file. Check will throw an error if ShowMyCode is False.
+ .Parameter PublisherAzureActiveDirectoryTenantId
+  AAD Tenant of the publisher to ensure access to keyvault (unless publisher check is disables in server config)
  .Example
   Publish-BcContainerApp -appFile c:\temp\myapp.app
  .Example
@@ -54,6 +56,7 @@ function Publish-BcContainerApp {
         [ValidateSet('Add','Clean','Development','ForceSync')]
         [string] $syncMode,
         [switch] $install,
+        [switch] $upgrade,
         [Parameter(Mandatory=$false)]
         [string] $tenant = "default",
         [ValidateSet('Extension','SymbolsOnly')]
@@ -66,46 +69,85 @@ function Publish-BcContainerApp {
         [string] $language = "",
         [hashtable] $replaceDependencies = $null,
         [ValidateSet('Ignore','True','False','Check')]
-        [string] $ShowMyCode = "Ignore"
+        [string] $ShowMyCode = "Ignore",
+        [string] $PublisherAzureActiveDirectoryTenantId
     )
 
     Add-Type -AssemblyName System.Net.Http
     $customconfig = Get-BcContainerServerConfiguration -ContainerName $containerName
 
-    $copied = $false
+    $Params = @{
+        "containerName" = $containerName
+        "skipVerification" = $skipVerification
+        "sync" = $sync
+        "install" = $install
+        "tenant" = $tenant
+        "useDevEndpoint" = $useDevEndpoint
+        "language" = $language
+        "replaceDependencies" = $replaceDependencies
+        "ShowMyCode" = $showMyCode
+        "PublisherAzureActiveDirectoryTenantId" = $PublisherAzureActiveDirectoryTenantId 
+    }
+    if ($syncMode) { $Params += @{ "SyncMode" = $syncMode } }
+    if ($packageType) { $Params += @{ "packageType" = $packageType } }
+    if ($scope) { $Params += @{ "scope" = $scope } }
+    if ($credential) { $Params += @{ "credential" = $credential } }
+
     if ($appFile.ToLower().StartsWith("http://") -or $appFile.ToLower().StartsWith("https://")) {
         $appUrl = $appFile
-        $appFile = Join-Path $extensionsFolder "$containerName\_$([System.Uri]::UnescapeDataString([System.IO.Path]::GetFileName($appUrl).split("?")[0]))"
-        (New-Object System.Net.WebClient).DownloadFile($appUrl, $appFile)
-        $containerAppFile = Get-BcContainerPath -containerName $containerName -path $appFile
-        if ($ShowMyCode -ne "Ignore" -or $replaceDependencies) {
-            Write-Host "Checking dependencies in $appFile"
-            Replace-DependenciesInAppFile -containerName $containerName -Path $appFile -replaceDependencies $replaceDependencies -ShowMyCode $ShowMyCode
-        }
-        $copied = $true
+        $name = [System.Uri]::UnescapeDataString([System.IO.Path]::GetFileName($appUrl).split("?")[0])
+        $appFile = Join-Path $extensionsFolder "$containerName\_$name"
+        Download-File -sourceUrl $appUrl -destinationFile $appFile
+
+        Publish-BcContainerApp @Params -appFile $appFile
+
+        Remove-Item $appFile -Force
+        return
     }
-    else {
-        $containerAppFile = Get-BcContainerPath -containerName $containerName -path $appFile
-        if ("$containerAppFile" -eq "" -or ($replaceDependencies) -or $appFile.StartsWith(':')) {
-            $sharedAppFile = Join-Path $extensionsFolder "$containerName\_$([System.IO.Path]::GetFileName($appFile))"
-            if ($appFile.StartsWith(':')) {
-                Copy-FileFromBCContainer -containerName $containerName -containerPath $appFile.Substring(1) -localPath $sharedAppFile
-                if ($ShowMyCode -ne "Ignore" -or $replaceDependencies) {
-                    Write-Host "Checking dependencies in $sharedAppFile"
-                    Replace-DependenciesInAppFile -containerName $containerName -Path $sharedAppFile -replaceDependencies $replaceDependencies -ShowMyCode $ShowMyCode
-                }
-            }
-            elseif ($ShowMyCode -ne "Ignore" -or $replaceDependencies) {
-                Write-Host "Checking dependencies in $appFile"
-                Replace-DependenciesInAppFile -containerName $containerName -Path $appFile -Destination $sharedAppFile -replaceDependencies $replaceDependencies -ShowMyCode $ShowMyCode
-            }
-            else {
-                Copy-Item -Path $appFile -Destination $sharedAppFile
-            }
-            $appFile = $sharedAppFile
-            $containerAppFile = Get-BcContainerPath -containerName $containerName -path $appFile
+
+    if (!($appFile.StartsWith(':')) -and (Test-Path $appFile) -and ([string]::new([char[]](Get-Content $appFile -Encoding byte -TotalCount 2)) -eq "PK")) {
+        $copied = $false
+        $zipFolder = Join-Path $extensionsFolder "$containerName\_$([System.IO.Path]::GetFileName($appFile))"
+        if ($appFile -notlike "*.zip") {
+            Copy-Item $appFile "$appFile.zip"
+            $appFile = "$appFile.zip"
             $copied = $true
         }
+        Expand-Archive $appfile -DestinationPath $zipFolder -Force
+        $apps = Get-ChildItem -Path $zipFolder -Filter '*.app' -Recurse | Sort-Object -Property "Name" | ForEach-Object { $_.FullName }
+        try {
+            $apps = Sort-AppFilesByDependencies -appFiles $apps -WarningAction SilentlyContinue
+        }
+        catch {
+            # use alphabetic sorting if runtime apps
+        }
+        $apps | ForEach-Object { Publish-BcContainerApp @Params -appFile $_ }
+        if ($copied) { Remove-Item $appFile -Force }
+        Remove-Item -Path $zipFolder -Recurse -Force
+        return
+    }
+
+    $copied = $false
+    $containerAppFile = Get-BcContainerPath -containerName $containerName -path $appFile
+    if ("$containerAppFile" -eq "" -or $ShowMyCode -ne "Ignore" -or ($replaceDependencies) -or $appFile.StartsWith(':')) {
+        $sharedAppFile = Join-Path $extensionsFolder "$containerName\_$([System.IO.Path]::GetFileName($appFile))"
+        if ($appFile.StartsWith(':')) {
+            Copy-FileFromBCContainer -containerName $containerName -containerPath $appFile.Substring(1) -localPath $sharedAppFile
+            if ($ShowMyCode -ne "Ignore" -or ($replaceDependencies)) {
+                Write-Host "Checking dependencies in $sharedAppFile"
+                Replace-DependenciesInAppFile -containerName $containerName -Path $sharedAppFile -replaceDependencies $replaceDependencies -ShowMyCode $ShowMyCode
+            }
+        }
+        elseif ($ShowMyCode -ne "Ignore" -or ($replaceDependencies)) {
+            Write-Host "Checking dependencies in $appFile"
+            Replace-DependenciesInAppFile -containerName $containerName -Path $appFile -Destination $sharedAppFile -replaceDependencies $replaceDependencies -ShowMyCode $ShowMyCode
+        }
+        else {
+            Copy-Item -Path $appFile -Destination $sharedAppFile
+        }
+        $appFile = $sharedAppFile
+        $containerAppFile = Get-BcContainerPath -containerName $containerName -path $appFile
+        $copied = $true
     }
 
     if ($useDevEndpoint) {
@@ -188,7 +230,19 @@ function Publish-BcContainerApp {
             Write-Host "Publishing $appName to $url"
             $result = $HttpClient.PostAsync($url, $multipartContent).GetAwaiter().GetResult()
             if (!$result.IsSuccessStatusCode) {
-                throw "Status Code $($result.StatusCode) : $($result.ReasonPhrase)"
+                $message = "Status Code $($result.StatusCode) : $($result.ReasonPhrase)"
+                try {
+                    $resultMsg = $result.Content.ReadAsStringAsync().Result
+                    try {
+                        $json = $resultMsg | ConvertFrom-Json
+                        $message += "`n$($json.Message)"
+                    }
+                    catch {
+                        $message += "`n$resultMsg"
+                    }
+                }
+                catch {}
+                throw $message
             }
         }
         finally {
@@ -203,7 +257,7 @@ function Publish-BcContainerApp {
     }
     else {
 
-        Invoke-ScriptInBcContainer -containerName $containerName -ScriptBlock { Param($appFile, $skipVerification, $sync, $install, $tenant, $syncMode, $packageType, $scope, $language, $replaceDependencies)
+        Invoke-ScriptInBcContainer -containerName $containerName -ScriptBlock { Param($appFile, $skipVerification, $sync, $install, $upgrade, $tenant, $syncMode, $packageType, $scope, $language, $PublisherAzureActiveDirectoryTenantId)
 
             $publishArgs = @{ "packageType" = $packageType }
             if ($scope) {
@@ -212,11 +266,14 @@ function Publish-BcContainerApp {
                     $publishArgs += @{ "Tenant" = $tenant }
                 }
             }
+            if ($PublisherAzureActiveDirectoryTenantId) {
+                $publishArgs += @{ "PublisherAzureActiveDirectoryTenantId" = $PublisherAzureActiveDirectoryTenantId }
+            }
     
             Write-Host "Publishing $appFile"
             Publish-NavApp -ServerInstance $ServerInstance -Path $appFile -SkipVerification:$SkipVerification @publishArgs
 
-            if ($sync -or $install) {
+            if ($sync -or $install -or $upgrade) {
 
                 $navAppInfo = Get-NAVAppInfo -Path $appFile
                 $appPublisher = $navAppInfo.Publisher
@@ -243,9 +300,19 @@ function Publish-BcContainerApp {
                     Write-Host "Installing $appName on tenant $tenant"
                     Install-NavApp -ServerInstance $ServerInstance -Publisher $appPublisher -Name $appName -Version $appVersion -Tenant $tenant @languageArgs
                 }
+
+                if ($upgrade) {
+
+                    $languageArgs = @{}
+                    if ($language) {
+                        $languageArgs += @{ "Language" = $language }
+                    }
+                    Write-Host "Upgrading $appName on tenant $tenant"
+                    Start-NavAppDataUpgrade -ServerInstance $ServerInstance -Publisher $appPublisher -Name $appName -Version $appVersion -Tenant $tenant @languageArgs
+                }
             }
 
-        } -ArgumentList $containerAppFile, $skipVerification, $sync, $install, $tenant, $syncMode, $packageType, $scope, $language, $replaceDependencies
+        } -ArgumentList $containerAppFile, $skipVerification, $sync, $install, $upgrade, $tenant, $syncMode, $packageType, $scope, $language, $PublisherAzureActiveDirectoryTenantId
     }
 
     if ($copied) { 

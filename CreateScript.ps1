@@ -301,11 +301,17 @@ $minWidth = 150
 if (($pswindow.BufferSize) -and ($pswindow.WindowSize) -and ($pswindow.WindowSize.Width -lt $minWidth)) {
     $buffersize = $pswindow.BufferSize
     $buffersize.width = $minWidth
-    $pswindow.buffersize = $buffersize
+    try {
+        $pswindow.buffersize = $buffersize
+    }
+    catch {}
     
     $newsize = $pswindow.windowsize
     $newsize.width = $minWidth
-    $pswindow.windowsize = $newsize
+    try {
+        $pswindow.windowsize = $newsize
+    }
+    catch {}
 }
 
 $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -488,7 +494,7 @@ $Step.ContainerName {
 '@ `
             -description "Enter the name of the container.`nContainer names are case sensitive and must start with a letter.`n`nNote: We recommend short lower case names as container names." `
             -question "Container name" `
-            -default "my" `
+            -default "bcserver" `
             -previousStep
         if ($script:wizardStep -eq $script:thisStep+1) {
             $script:prevSteps.Push($script:thisStep)
@@ -994,7 +1000,8 @@ $Step.License {
         -description $description `
         -question "License File" `
         -default $default `
-        -previousStep
+        -previousStep `
+        -doNotConvertToLower
     if ($script:wizardStep -eq $script:thisStep+1) {
         $script:prevSteps.Push($script:thisStep)
     }

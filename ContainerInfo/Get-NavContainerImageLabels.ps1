@@ -9,7 +9,7 @@
  .Parameter registryCredential
   Credentials for the registry if you are using a private registry (incl. bcinsider)
  .Example
-  $created = (Get-BcContainerImageLabels -imageName "mcr.microsoft.com/businesscentral/sandbox:us-ltsc2019").created
+  $created = (Get-BcContainerImageLabels -imageName myimage:mytag).created
 #>
 function Get-BcContainerImageLabels {
     Param (
@@ -22,7 +22,7 @@ function Get-BcContainerImageLabels {
 
     if ($imageName.IndexOf("/") -lt 0) {
         try {
-            return (docker inspect $usegenericimage | ConvertFrom-Json).Config.Labels
+            return (docker inspect $imageName | ConvertFrom-Json).Config.Labels
         }
         catch {
             return

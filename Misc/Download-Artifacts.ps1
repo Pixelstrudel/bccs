@@ -76,19 +76,10 @@ function Download-Artifacts {
             if (-not $exists) {
                 Write-Host "Downloading application artifact $($appUri.AbsolutePath)"
                 $appZip = Join-Path ([System.IO.Path]::GetTempPath()) "$([Guid]::NewGuid().ToString()).zip"
-                try {
-                    TestSasToken -sasToken $artifactUrl
-                    Download-File -sourceUrl $artifactUrl -destinationFile $appZip -timeout $timeout
-                }
-                catch {
-                    if ($artifactUrl.Contains('.azureedge.net/')) {
-                        $artifactUrl = $artifactUrl.Replace('.azureedge.net/','.blob.core.windows.net/')
-                        Write-Host "Retrying download..."
-                        Download-File -sourceUrl $artifactUrl -destinationFile $appZip -timeout $timeout
-                    }
-                }
+                TestSasToken -sasToken $artifactUrl
+                Download-File -sourceUrl $artifactUrl -destinationFile $appZip -timeout $timeout
                 Write-Host "Unpacking application artifact to tmp folder " -NoNewline
-                $tmpFolder = Join-Path ([System.IO.Path]::GetDirectoryName($appArtifactPath)) "tmp$(([datetime]::Now).Ticks)"
+                $tmpFolder = Join-Path ([System.IO.Path]::GetDirectoryName($appArtifactPath)) ([System.IO.Path]::GetRandomFileName())
                 try {
                     Expand-7zipArchive -Path $appZip -DestinationPath $tmpFolder
                     while (!(Test-Path "$appArtifactPath")) {
@@ -109,7 +100,7 @@ function Download-Artifacts {
                     }
                 }
             }
-            Set-Content -Path (Join-Path $appArtifactPath 'lastused') -Value "$([datetime]::UtcNow.Ticks)" -ErrorAction SilentlyContinue
+            try { [System.IO.File]::WriteAllText((Join-Path $appArtifactPath 'lastused'), "$([datetime]::UtcNow.Ticks)") } catch {}
     
             $appManifestPath = Join-Path $appArtifactPath "manifest.json"
             $appManifest = Get-Content $appManifestPath | ConvertFrom-Json
@@ -162,19 +153,10 @@ function Download-Artifacts {
                 if (-not $exists) {
                     Write-Host "Downloading platform artifact $($platformUri.AbsolutePath)"
                     $platformZip = Join-Path ([System.IO.Path]::GetTempPath()) "$([Guid]::NewGuid().ToString()).zip"
-                    try {
-                        TestSasToken -sasToken $artifactUrl
-                        Download-File -sourceUrl $platformUrl -destinationFile $platformZip -timeout $timeout
-                    }
-                    catch {
-                        if ($platformUrl.Contains('.azureedge.net/')) {
-                            $platformUrl = $platformUrl.Replace('.azureedge.net/','.blob.core.windows.net/')
-                            Write-Host "Retrying download..."
-                            Download-File -sourceUrl $platformUrl -destinationFile $platformZip -timeout $timeout
-                        }
-                    }
+                    TestSasToken -sasToken $artifactUrl
+                    Download-File -sourceUrl $platformUrl -destinationFile $platformZip -timeout $timeout
                     Write-Host "Unpacking platform artifact to tmp folder " -NoNewline
-                    $tmpFolder = Join-Path ([System.IO.Path]::GetDirectoryName($platformArtifactPath)) "tmp$(([datetime]::Now).Ticks)"
+                    $tmpFolder = Join-Path ([System.IO.Path]::GetDirectoryName($platformArtifactPath)) ([System.IO.Path]::GetRandomFileName())
                     try {
                         Expand-7zipArchive -Path $platformZip -DestinationPath $tmpFolder
                         $downloadprereqs = $false
@@ -223,7 +205,7 @@ function Download-Artifacts {
                     }
         
                 }
-                Set-Content -Path (Join-Path $platformArtifactPath 'lastused') -Value "$([datetime]::UtcNow.Ticks)" -ErrorAction SilentlyContinue
+                try { [System.IO.File]::WriteAllText((Join-Path $platformArtifactPath 'lastused'), "$([datetime]::UtcNow.Ticks)") } catch {}
                 $platformArtifactPath
             }
             finally {
