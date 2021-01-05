@@ -13,6 +13,12 @@
   Specify a source database which will be the template for the new tenant (default is tenant)
  .Parameter destinationDatabase
   Specify a database name for the new tenant (default is the tenantid)
+ .Parameter alternateId
+  Specify an array of alternate tenant ids (hostnames f.ex.)
+ .Parameter allowAppDatabaseWrite
+  Include this switch if the tenant should have AllowAppDatabaseWrite set
+ .Parameter doNotCopyDatabase
+  Mount the database specified in destinationDatabase. Do not copy source database.
  .Example
   New-BcContainerTenant -containerName test2 -tenantId mytenant
 #>
@@ -25,7 +31,10 @@ function New-BcContainerTenant {
         [PSCredential] $sqlCredential = $null,
         [string] $sourceDatabase = "tenant",
         [string] $destinationDatabase = $tenantId,
-        [string[]] $alternateId = @()
+        [string[]] $alternateId = @(),
+        [switch] $allowAppDatabaseWrite,
+        [switch] $doNotCopyDatabase,
+        [string] $applicationInsightsKey = ""
     )
 
     Write-Host "Creating Tenant $tenantId on $containerName"
@@ -34,7 +43,7 @@ function New-BcContainerTenant {
         throw "You cannot add a tenant called tenant"
     }
 
-    Invoke-ScriptInBcContainer -containerName $containerName -ScriptBlock { Param($containerName, $tenantId, [PSCredential]$sqlCredential, $sourceDatabase, $destinationDatabase, $alternateId)
+    Invoke-ScriptInBcContainer -containerName $containerName -ScriptBlock { Param($containerName, $tenantId, [PSCredential]$sqlCredential, $sourceDatabase, $destinationDatabase, $alternateId, $doNotCopyDatabase, $allowAppDatabaseWrite, $applicationInsightsKey)
 
         $customConfigFile = Join-Path (Get-Item "C:\Program Files\Microsoft Dynamics NAV\*\Service").FullName "CustomSettings.config"
         [xml]$customConfig = [System.IO.File]::ReadAllText($customConfigFile)
@@ -55,9 +64,19 @@ function New-BcContainerTenant {
             $alternateId += @($tenantHostname)
         }
 
+        $Params = @{}
+        if ($allowAppDatabaseWrite) {
+            $Params += @{ "AllowAppDatabaseWrite" = $true }
+        }
+        if ($applicationInsightsKey) {
+            $Params += @{ "applicationInsightsInstrumentationKey" = $applicationInsightsKey }
+        }
+
         # Setup tenant
-        Copy-NavDatabase -SourceDatabaseName $sourceDatabase -DestinationDatabaseName $destinationDatabase -DatabaseServer $databaseServer -DatabaseInstance $databaseInstance -DatabaseCredentials $sqlCredential
-        Mount-NavDatabase -ServerInstance $ServerInstance -TenantId $TenantId -DatabaseName $destinationDatabase -DatabaseServer $databaseServer -DatabaseInstance $databaseInstance -DatabaseCredentials $sqlCredential -AlternateId $alternateId
+        if (!$doNotCopyDatabase) {
+            Copy-NavDatabase -SourceDatabaseName $sourceDatabase -DestinationDatabaseName $destinationDatabase -DatabaseServer $databaseServer -DatabaseInstance $databaseInstance -DatabaseCredentials $sqlCredential
+        }
+        Mount-NavDatabase -ServerInstance $ServerInstance -TenantId $TenantId -DatabaseName $destinationDatabase -DatabaseServer $databaseServer -DatabaseInstance $databaseInstance -DatabaseCredentials $sqlCredential -AlternateId $alternateId @Params -WarningAction SilentlyContinue
 
         if (Test-Path "c:\run\my\updatehosts.ps1") {
             $ip = "127.0.0.1"
@@ -75,7 +94,7 @@ function New-BcContainerTenant {
             }
         }
 
-    } -ArgumentList $containerName, $tenantId, $sqlCredential, $sourceDatabase, $destinationDatabase, $alternateId
+    } -ArgumentList $containerName, $tenantId, $sqlCredential, $sourceDatabase, $destinationDatabase, $alternateId, $doNotCopyDatabase, $allowAppDatabaseWrite, $applicationInsightsKey
     Write-Host -ForegroundColor Green "Tenant successfully created"
 }
 Set-Alias -Name New-NavContainerTenant -Value New-BcContainerTenant

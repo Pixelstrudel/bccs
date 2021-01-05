@@ -12,6 +12,8 @@
   profile to use
  .Parameter credential
   Credentials of the SUPER user if using NavUserPassword authentication
+ .Parameter sqlcredential
+  SQL Credential if using an external sql server
  .Parameter accesstoken
   If your container is running AAD authentication, you need to specify an accesstoken for the user specified in credential
  .Parameter testSuite
@@ -47,6 +49,8 @@ function Get-TestsFromBcContainer {
         [Parameter(Mandatory=$false)]
         [PSCredential] $credential = $null,
         [Parameter(Mandatory=$false)]
+        [PSCredential] $sqlCredential = $credential,
+        [Parameter(Mandatory=$false)]
         [string] $accessToken = "",
         [Parameter(Mandatory=$false)]
         [string] $testSuite = "DEFAULT",
@@ -76,7 +80,7 @@ function Get-TestsFromBcContainer {
         }
     }
 
-    $PsTestToolFolder = Join-Path $extensionsFolder "$containerName\PsTestTool-6"
+    $PsTestToolFolder = Join-Path $extensionsFolder "$containerName\PsTestTool"
     $PsTestFunctionsPath = Join-Path $PsTestToolFolder "PsTestFunctions.ps1"
     $ClientContextPath = Join-Path $PsTestToolFolder "ClientContext.ps1"
     $fobfile = Join-Path $PsTestToolFolder "PSTestToolPage.fob"
@@ -123,7 +127,7 @@ function Get-TestsFromBcContainer {
                 if ($clientServicesCredentialType -eq "Windows") {
                     Import-ObjectsToNavContainer -containerName $containerName -objectsFile $fobfile
                 } else {
-                    Import-ObjectsToNavContainer -containerName $containerName -objectsFile $fobfile -sqlCredential $credential
+                    Import-ObjectsToNavContainer -containerName $containerName -objectsFile $fobfile -sqlCredential $sqlCredential
                 }
             }
         } catch {
@@ -218,7 +222,8 @@ function Get-TestsFromBcContainer {
                       -DisabledTests $disabledtests `
                       -testPage $testPage `
                       -debugMode:$debugMode `
-                      -ignoreGroups:$ignoreGroups
+                      -ignoreGroups:$ignoreGroups `
+                      -connectFromHost:$connectFromHost
 
         }
         catch {

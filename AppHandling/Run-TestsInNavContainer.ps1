@@ -12,6 +12,8 @@
   profile to use
  .Parameter credential
   Credentials of the SUPER user if using NavUserPassword authentication
+ .Parameter sqlcredential
+  SQL Credential if using an external sql server
  .Parameter accesstoken
   If your container is running AAD authentication, you need to specify an accesstoken for the user specified in credential
  .Parameter testSuite
@@ -26,8 +28,12 @@
   Filename where the function should place an XUnit compatible result file
  .Parameter AppendToXUnitResultFile
   Specify this switch if you want the function to append to the XUnit compatible result file instead of overwriting it
+ .Parameter JUnitResultFileName
+  Filename where the function should place an JUnit compatible result file
+ .Parameter AppendToJUnitResultFile
+  Specify this switch if you want the function to append to the JUnit compatible result file instead of overwriting it
  .Parameter ReRun
-  Specify this switch if you want the function to replace an existing test run (of the same test codeunit) in the XUnit compatible result file instead of adding it
+  Specify this switch if you want the function to replace an existing test run (of the same test codeunit) in the test result file instead of adding it
  .Parameter AzureDevOps
   Generate Azure DevOps Pipeline compatible output. This setting determines the severity of errors.
  .Parameter detailed
@@ -55,6 +61,8 @@
   Run-TestsInBcContainer -containerName test -credential $credential
  .Example
   Run-TestsInBcContainer -containerName $containername -credential $credential -XUnitResultFileName "c:\ProgramData\BcContainerHelper\$containername.results.xml" -AzureDevOps "warning"
+ .Example
+  Run-TestsInBcContainer -containerName $containername -credential $credential -JUnitResultFileName "c:\ProgramData\BcContainerHelper\$containername.results.xml" -AzureDevOps "warning"
 #>
 function Run-TestsInBcContainer {
     Param (
@@ -67,6 +75,8 @@ function Run-TestsInBcContainer {
         [string] $profile = "",
         [Parameter(Mandatory=$false)]
         [PSCredential] $credential = $null,
+        [Parameter(Mandatory=$false)]
+        [PSCredential] $sqlCredential = $credential,
         [Parameter(Mandatory=$false)]
         [string] $accessToken = "",
         [Parameter(Mandatory=$false)]
@@ -82,6 +92,8 @@ function Run-TestsInBcContainer {
         [Parameter(Mandatory=$false)]
         [string] $XUnitResultFileName,
         [switch] $AppendToXUnitResultFile,
+        [string] $JUnitResultFileName,
+        [switch] $AppendToJUnitResultFile,
         [switch] $ReRun,
         [ValidateSet('no','error','warning')]
         [string] $AzureDevOps = 'no',
@@ -111,7 +123,7 @@ function Run-TestsInBcContainer {
         }
     }
 
-    $PsTestToolFolder = Join-Path $extensionsFolder "$containerName\PsTestTool-6"
+    $PsTestToolFolder = Join-Path $extensionsFolder "$containerName\PsTestTool"
     $PsTestFunctionsPath = Join-Path $PsTestToolFolder "PsTestFunctions.ps1"
     $ClientContextPath = Join-Path $PsTestToolFolder "ClientContext.ps1"
     $fobfile = Join-Path $PsTestToolFolder "PSTestToolPage.fob"
@@ -129,7 +141,7 @@ function Run-TestsInBcContainer {
     if ($useUrl -eq "") {
         if ([bool]($serverConfiguration.PSobject.Properties.name -eq "EnableTaskScheduler")) {
             if ($serverConfiguration.EnableTaskScheduler -eq "True") {
-                Write-Host -ForegroundColor Red "WARNING: TaskScheduler is running in the container. Please specify -EnableTaskScheduler:`$false when creating container."
+                Write-Host -ForegroundColor Red "WARNING: TaskScheduler is running in the container, this can lead to test failures. Specify -EnableTaskScheduler:`$false to disable Task Scheduler."
             }
         }
     }
@@ -173,7 +185,7 @@ function Run-TestsInBcContainer {
                 if ($clientServicesCredentialType -eq "Windows") {
                     Import-ObjectsToNavContainer -containerName $containerName -objectsFile $fobfile
                 } else {
-                    Import-ObjectsToNavContainer -containerName $containerName -objectsFile $fobfile -sqlCredential $credential
+                    Import-ObjectsToNavContainer -containerName $containerName -objectsFile $fobfile -sqlCredential $sqlCredential
                 }
             }
         } catch {
@@ -264,13 +276,17 @@ function Run-TestsInBcContainer {
                               -DisabledTests $disabledtests `
                               -XUnitResultFileName $XUnitResultFileName `
                               -AppendToXUnitResultFile:$AppendToXUnitResultFile `
+                              -JUnitResultFileName $JUnitResultFileName `
+                              -AppendToJUnitResultFile:$AppendToJUnitResultFile `
                               -ReRun:$ReRun `
                               -AzureDevOps $AzureDevOps `
                               -detailed:$detailed `
                               -debugMode:$debugMode `
-                              -testPage $testPage
+                              -testPage $testPage `
+                              -connectFromHost:$connectFromHost
                 }
                 catch {
+                    Write-Host $_.ScriptStackTrace
                     if ($debugMode -and $clientContext) {
                         Dump-ClientContext -clientcontext $clientContext 
                     }
@@ -292,7 +308,15 @@ function Run-TestsInBcContainer {
                     }
                 }
 
-                $result = Invoke-ScriptInBcContainer -containerName $containerName { Param([string] $tenant, [string] $companyName, [string] $profile, [pscredential] $credential, [string] $accessToken, [string] $testSuite, [string] $testGroup, [string] $testCodeunit, [string] $testFunction, [string] $PsTestFunctionsPath, [string] $ClientContextPath, [string] $XUnitResultFileName, [bool] $AppendToXUnitResultFile, [bool] $ReRun, [string] $AzureDevOps, [bool] $detailed, [timespan] $interactionTimeout, $testPage, $version, $culture, $timezone, $debugMode, $usePublicWebBaseUrl, $useUrl, $extensionId, $disabledtests)
+                $containerJUnitResultFileName = ""
+                if ($JUnitResultFileName) {
+                    $containerJUnitResultFileName = Get-BcContainerPath -containerName $containerName -path $JUnitResultFileName
+                    if ("$containerJUnitResultFileName" -eq "") {
+                        throw "The path for JUnitResultFileName ($JUnitResultFileName) is not shared with the container."
+                    }
+                }
+
+                $result = Invoke-ScriptInBcContainer -containerName $containerName { Param([string] $tenant, [string] $companyName, [string] $profile, [pscredential] $credential, [string] $accessToken, [string] $testSuite, [string] $testGroup, [string] $testCodeunit, [string] $testFunction, [string] $PsTestFunctionsPath, [string] $ClientContextPath, [string] $XUnitResultFileName, [bool] $AppendToXUnitResultFile, [string] $JUnitResultFileName, [bool] $AppendToJUnitResultFile, [bool] $ReRun, [string] $AzureDevOps, [bool] $detailed, [timespan] $interactionTimeout, $testPage, $version, $culture, $timezone, $debugMode, $usePublicWebBaseUrl, $useUrl, $extensionId, $disabledtests)
     
                     $newtonSoftDllPath = (Get-Item "C:\Program Files\Microsoft Dynamics NAV\*\Service\NewtonSoft.json.dll").FullName
                     $clientDllPath = "C:\Test Assemblies\Microsoft.Dynamics.Framework.UI.Client.dll"
@@ -357,13 +381,17 @@ function Run-TestsInBcContainer {
                                   -DisabledTests $disabledtests `
                                   -XUnitResultFileName $XUnitResultFileName `
                                   -AppendToXUnitResultFile:$AppendToXUnitResultFile `
+                                  -JUnitResultFileName $JUnitResultFileName `
+                                  -AppendToJUnitResultFile:$AppendToJUnitResultFile `
                                   -ReRun:$ReRun `
                                   -AzureDevOps $AzureDevOps `
                                   -detailed:$detailed `
                                   -debugMode:$debugMode `
-                                  -testPage $testPage
+                                  -testPage $testPage `
+                                  -connectFromHost:$connectFromHost
                     }
                     catch {
+                        Write-Host $_.ScriptStackTrace
                         if ($debugMode -and $clientContext) {
                             Dump-ClientContext -clientcontext $clientContext 
                         }
@@ -379,7 +407,7 @@ function Run-TestsInBcContainer {
                         }
                     }
             
-                } -argumentList $tenant, $companyName, $profile, $credential, $accessToken, $testSuite, $testGroup, $testCodeunit, $testFunction, (Get-BcContainerPath -containerName $containerName -Path $PsTestFunctionsPath), (Get-BCContainerPath -containerName $containerName -path $ClientContextPath), $containerXUnitResultFileName, $AppendToXUnitResultFile, $ReRun, $AzureDevOps, $detailed, $interactionTimeout, $testPage, $version, $culture, $timezone, $debugMode, $usePublicWebBaseUrl, $useUrl, $extensionId, $disabledtests
+                } -argumentList $tenant, $companyName, $profile, $credential, $accessToken, $testSuite, $testGroup, $testCodeunit, $testFunction, (Get-BcContainerPath -containerName $containerName -Path $PsTestFunctionsPath), (Get-BCContainerPath -containerName $containerName -path $ClientContextPath), $containerXUnitResultFileName, $AppendToXUnitResultFile, $containerJUnitResultFileName, $AppendToJUnitResultFile, $ReRun, $AzureDevOps, $detailed, $interactionTimeout, $testPage, $version, $culture, $timezone, $debugMode, $usePublicWebBaseUrl, $useUrl, $extensionId, $disabledtests
             }
             if ($result -is [array]) {
                 0..($result.Count-2) | % { Write-Host $result[$_] }
