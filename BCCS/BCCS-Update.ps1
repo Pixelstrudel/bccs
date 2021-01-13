@@ -1,4 +1,4 @@
-if (Test-Path .\.git) {
+if (Test-Path "$($bccsScriptFolder)\.git") {
     try {
         $branch = &git -C $bccsScriptFolder rev-parse --abbrev-ref HEAD 
         $checkout = $true
