@@ -116,16 +116,11 @@ function New-BcContainerFromDeployFile {
 
     Write-Log $deploy_imageName
 
-    if (IsURL $deploy_imageName) {
-        Write-Log "Image Name = Image. Using Image."
-        $params += @{'imageName' = $deploy_imageName }
-    }
-    else {
-        Write-Log "Image Name = Artifact String. Finding Artifact URL for '$($deploy_imageName)'..."
-        $artifactUrl = GetArtifactURLFromString $deploy_imageName
-        Write-Log "Found Artifact Url: $($artifactUrl)"
-        $params += @{'artifactUrl' = $artifactUrl }
-    }
+    Write-Log "Finding Artifact URL for '$($deploy_imageName)'..."
+    $artifactUrl = GetArtifactURLFromString $deploy_imageName
+    Write-Log "Found Artifact Url: $($artifactUrl)"
+    $params += @{'artifactUrl' = $artifactUrl }
+    
 
     if ($licenseFile -ne "") {
         if (!(Test-Path -path $licenseFile)) {
