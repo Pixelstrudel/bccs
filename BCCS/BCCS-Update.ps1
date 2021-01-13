@@ -12,7 +12,9 @@ if (Test-Path "$($bccsScriptFolder)\.git") {
             }
         }
         if ($checkout) {
+			Write-Log "Fetching..."
             git -C $bccsScriptFolder fetch
+			Write-Log "Checking out master and/or pulling changes..."
             git -C $bccsScriptFolder checkout master
             git -C $bccsScriptFolder pull
         }
