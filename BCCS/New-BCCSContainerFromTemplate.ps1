@@ -80,16 +80,10 @@ function New-BCCSContainerFromTemplate {
         Default { $params += @{'isolation' = 'process' } }
     }
 
-    if (IsURL $template.imageName) {
-        Write-Log "Image Name = Image. Using Image."
-        $params += @{'imageName' = $template.imageName }
-    }
-    else {
-        Write-Log "Image Name = Artifact String. Finding Artifact URL..."
-        $artifactUrl = GetArtifactURLFromString $template.imageName
-        Write-Log "Found Artifact Url: $($artifactUrl)"
-        $params += @{'artifactUrl' = $artifactUrl }
-    }
+    Write-Log "Finding Artifact URL..."
+    $artifactUrl = GetArtifactURLFromString $template.imageName
+    Write-Log "Found Artifact Url: $($artifactUrl)"
+    $params += @{'artifactUrl' = $artifactUrl }
 
     if ($template.auth -match "UserPassword") {
         $credential = $host.ui.PromptForCredential("Enter credentials to use for the container", "Please enter a user name and password.", "admin", "")
