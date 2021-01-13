@@ -67,6 +67,12 @@ function FindSingleResultByPattern ($string, $pattern, $name, $default) {
 
 function GetArtifactURLFromString($string) {
     $str = $string
+	
+	if ($str -match "/") {
+		$newStr = $str.Substring($str.LastIndexOf("/") + 1)
+		Write-Host "$($str) seems to be an URL. Using '$($newStr)' as Artifact String."
+		$str = $newStr
+	}
     
     $type = FindSingleResultByPattern $str "OnPrem|Sandbox" "Type" "OnPrem"
     $str = $str.Replace($type, "")
