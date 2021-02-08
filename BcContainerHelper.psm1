@@ -1,5 +1,9 @@
 #Requires -PSEdition Desktop 
 
+param(
+    [switch] $Silent
+)
+
 Set-StrictMode -Version 2.0
 
 $verbosePreference = "SilentlyContinue"
@@ -23,6 +27,7 @@ function Get-ContainerHelperConfig {
         Set-Variable -scope Script -Name bcContainerHelperConfig -Value @{
             "bcartifactsCacheFolder" = "c:\bcartifacts.cache"
             "genericImageName" = 'mcr.microsoft.com/businesscentral:{0}'
+            "genericImageNameFilesOnly" = 'mcr.microsoft.com/businesscentral:{0}-filesonly'
             "usePsSession" = $isAdministrator
             "use7zipIfAvailable" = $true
             "defaultNewContainerParameters" = @{ }
@@ -68,7 +73,9 @@ function Get-ContainerHelperConfig {
             $keys = $bcContainerHelperConfig.Keys | % { $_ }
             $keys | % {
                 if ($savedConfig.PSObject.Properties.Name -eq "$_") {
-                    Write-Host "Setting $_ = $($savedConfig."$_")"
+                    if (!$silent) {
+                        Write-Host "Setting $_ = $($savedConfig."$_")"
+                    }
                     $bcContainerHelperConfig."$_" = $savedConfig."$_"
         
                 }
@@ -126,7 +133,9 @@ $extensionsFolder = Join-Path $hostHelperFolder "Extensions"
 $containerHelperFolder = $bcContainerHelperConfig.ContainerHelperFolder
 
 $BcContainerHelperVersion = Get-Content (Join-Path $PSScriptRoot "Version.txt")
-Write-Host "BcContainerHelper version $BcContainerHelperVersion"
+if (!$silent) {
+    Write-Host "BcContainerHelper version $BcContainerHelperVersion"
+}
 
 $sessions = @{}
 
@@ -226,6 +235,7 @@ Check-BcContainerHelperPermissions -Silent
 . (Join-Path $PSScriptRoot "AppHandling\Install-NAVSipCryptoProviderFromNavContainer.ps1")
 . (Join-Path $PSScriptRoot "AppHandling\Sign-NavContainerApp.ps1")
 . (Join-Path $PSScriptRoot "AppHandling\Get-NavContainerAppRuntimePackage.ps1")
+. (Join-Path $PSScriptRoot "AppHandling\Convert-BcAppsToRuntimePackages.ps1")
 . (Join-Path $PSScriptRoot "AppHandling\Get-NavContainerApp.ps1")
 . (Join-Path $PSScriptRoot "AppHandling\Extract-AppFileToFolder.ps1")
 . (Join-Path $PSScriptRoot "AppHandling\Replace-DependenciesInAppFile.ps1")
@@ -242,7 +252,6 @@ Check-BcContainerHelperPermissions -Silent
 . (Join-Path $PSScriptRoot "AppHandling\Run-AlPipeline.ps1")
 . (Join-Path $PSScriptRoot "AppHandling\Run-AlValidation.ps1")
 . (Join-Path $PSScriptRoot "AppHandling\Run-AlCops.ps1")
-. (Join-Path $PSScriptRoot "AppHandling\Publish-PerTenantExtensionApps.ps1")
 . (Join-Path $PSScriptRoot "AppHandling\Publish-BuildOutputToStorage.ps1")
 
 # Tenant Handling functions
@@ -272,6 +281,14 @@ Check-BcContainerHelperPermissions -Silent
 . (Join-Path $PSScriptRoot "BcSaaS\Renew-BcAuthContext.ps1")
 . (Join-Path $PSScriptRoot "BcSaaS\Get-BcEnvironments.ps1")
 . (Join-Path $PSScriptRoot "BcSaaS\Get-BcPublishedApps.ps1")
+. (Join-Path $PSScriptRoot "BcSaaS\Get-BcInstalledExtensions.ps1")
+. (Join-Path $PSScriptRoot "BcSaaS\Install-BcAppFromAppSource")
+. (Join-Path $PSScriptRoot "BcSaaS\Publish-PerTenantExtensionApps.ps1")
+. (Join-Path $PSScriptRoot "BcSaaS\New-BcEnvironment.ps1")
+. (Join-Path $PSScriptRoot "BcSaaS\Remove-BcEnvironment.ps1")
+. (Join-Path $PSScriptRoot "BcSaaS\Set-BcEnvironmentApplicationInsightsKey.ps1")
+. (Join-Path $PSScriptRoot "BcSaaS\Get-BcDatabaseExportHistory.ps1")
+. (Join-Path $PSScriptRoot "BcSaaS\New-BcDatabaseExport.ps1")
 
 # Azure VM specific functions
 . (Join-Path $PSScriptRoot "AzureVM\Replace-NavServerContainer.ps1")

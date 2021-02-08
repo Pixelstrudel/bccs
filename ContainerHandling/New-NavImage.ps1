@@ -18,6 +18,9 @@
   This allows you to specify a number of scripts you want to copy to the c:\run\my folder in the container (override functionality)
  .Parameter skipDatabase
   Adding this parameter creates an image without a database
+ .Parameter filesOnly
+  Include this switch to create a filesOnly container. A filesOnly container does not contain SQL Server, IIS or the ServiceTier, it only contains the files from BC in the same locations as a normal container.
+  A FilesOnly container can be used to compile apps and it can be used as a proxy container for an online Business Central environment
  .Parameter multitenant
   Adding this parameter creates an image with multitenancy
  .Parameter addFontsFromPath
@@ -35,6 +38,7 @@ function New-BcImage {
         $myScripts = @(),
         [switch] $skipDatabase,
         [switch] $multitenant,
+        [switch] $filesOnly,
         [string] $addFontsFromPath = "",
         [string] $licenseFile = "",
         [switch] $includeTestToolkit,
@@ -70,11 +74,11 @@ function New-BcImage {
     
     $hostOsVersion = [System.Version]::Parse("$($os.Version).$UBR")
     $hostOs = "Unknown/Insider build"
-    $bestGenericImageName = Get-BestGenericImageName -onlyMatchingBuilds
+    $bestGenericImageName = Get-BestGenericImageName -onlyMatchingBuilds -filesOnly:$filesOnly
 
     if ("$baseImage" -eq "") {
         if ("$bestGenericImageName" -eq "") {
-            $bestGenericImageName = Get-BestGenericImageName
+            $bestGenericImageName = Get-BestGenericImageName -filesOnly:$filesOnly
             Write-Host "WARNING: Unable to find matching generic image for your host OS. Using $bestGenericImageName"
         }
         $baseImage = $bestGenericImageName
@@ -127,14 +131,20 @@ function New-BcImage {
     if (!$imageName.Contains(':')) {
         $appUri = [Uri]::new($artifactUrl)
         $imageName += ":$($appUri.AbsolutePath.ToLowerInvariant().Replace('/','-').TrimStart('-'))"
-        if ($skipDatabase) {
-            $imageName += "-nodb"
-            $dbstr = " without database"
-
+        if ($filesOnly) {
+            $imageName += "-filesonly"
+            $dbstr = " with files only"
         }
-        if ($multitenant) {
-            $imageName += "-mt"
-            $mtstr = " multitenant"
+        else {
+            if ($skipDatabase) {
+                $imageName += "-nodb"
+                $dbstr = " without database"
+    
+            }
+            if ($multitenant) {
+                $imageName += "-mt"
+                $mtstr = " multitenant"
+            }
         }
     }
 
@@ -510,7 +520,7 @@ function New-BcImage {
 @"
 FROM $baseimage
 
-ENV DatabaseServer=localhost DatabaseInstance=SQLEXPRESS DatabaseName=CRONUS IsBcSandbox=$isBcSandbox artifactUrl=$artifactUrl
+ENV DatabaseServer=localhost DatabaseInstance=SQLEXPRESS DatabaseName=CRONUS IsBcSandbox=$isBcSandbox artifactUrl=$artifactUrl filesOnly=$filesOnly
 
 COPY my /run/
 COPY NAVDVD /NAVDVD/
