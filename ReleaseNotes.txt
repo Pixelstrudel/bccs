@@ -1,4 +1,37 @@
-1.0.20
+2.0.5
+Issue #1668 Run-AlValidation fails if app filename has a comma (and there is only one app)
+Issue #1675 Convert-BcAppsToRuntimePackages doesn't work with only one app.
+Issue #1678 Setup-BcContainerTestUsers fails on version 18
+Issue #1682 add silent mode to import module
+
+2.0.4
+Remove-BcEnvironment fails after waiting for environment removal
+Import-TestToolkitToBcContainer fails when installing apps in online environment unless a container called bcserver exists
+Add parameter -replacePackageId to Replace-DependenciesInAppFile to allow process to change package id in an app
+Add parameter -replacePackageId to Publish-BcContainerApp to allow process to change package id in an app
+Run-AlPipeline using a BcSaaS Sandbox environment to use replacePackageId when publishing previousApps and add delay to avoid conflicts
+New-BcEnvironment to wait for other environments being created before creating
+Specifying TestRunnerOnly installs all tests when not using online SaaS environments
+Add parameter applicationInsightsKey to Run-AlPipeline to stamp applicationInsightsKey into app.json for all apps
+
+2.0.3
+Issue #1655 variable $scopes not set
+Issue #1654 and #1656 Publish-BcContainerApp where the filename contains a comma fails.
+New Function Get-BcInstalledExtensions to return installed extensions (including PTEs) from an online Business Central environment
+New function New-BcDatabaseExport to start a new Database Export from an online Business Central environment
+New function Get-BcDatabaseExportHistory to get the Database Export History from an online Business Central tenant/environment
+
+2.0.2
+Allow no credentials with filesOnly containers
+Connect from inside the container to SaaS environment in Install-BcAppFromAppSource and Run-ConnectionTestToBcContainer to avoid file locks
+Add parameter allowInstallationOnProduction to Install-BcAppFromAppSource to allow installation in production environments
+Publish-BcContainerApp was refactored to reuse the appfiles unpacking mechanism from Run-AlValidation and more
+
+2.0.1
+Issue #1646 Get-BcArtifactUrl has decome a low slower with 2.0.0
+Issue #1645 Build Partially Succeeded - revert behavior
+
+2.0.0
 Issue #1596 support URLs in previousApps in Run-AlValidation
 Issue #1606 do not prune when creating images
 Remove compatibility for ancient generic image versions from New-BcContainer
@@ -6,6 +39,24 @@ New function New-BcAuthContext to create an authContext for BC SaaS based on cre
 New function Renew-BcAuthContext to renew an authContext for BC SaaS if necessary
 Added parameteres bcAuthContext and environment to Compile-AppInBcContainer to allow Compile-AppInBcContainer to download symbols from BC SaaS
 Added parameteres bcAuthContext and environment to Publish-AppToBcContainer to allow Publish-AppToBcContainer to publish apps to BC SaaS
+Issue #1613 wrong display of reclaimed space
+Added parameters after and before to Get-BcArtifactUrl to filter out artifacts created before after or after before
+Added outcome First to the Select parameter in Get-BcArtifactUrl to allow grabbing the first artifact mathing a filter
+Added new function Install-BcAppFromAppSource to install an AppSource App into a BC SaaS environment
+Added parameter includeTestRunnerOnly to Import-TestToolkitToBcContainer to allow importing only Test Runner
+Added parameteres bcAuthContext and environment to Import-TestToolkitToBcContainer to allow running tests on BC SaaS Sandbox environments (Test Runner is the only app in AppSource at the moment, TestFramework apps will be added)
+Added parameteres bcAuthContext and environment to Run-TestsInBcContainer to allow running tests on BC SaaS Sandbox environments
+Better stacktrace when exception happens in Invoke-ScriptInBcContainer
+Added parameteres bcAuthContext and environment to Run-AlPipeline to allow running a pipeline using BC SaaS Sandbox environments
+Issue #1591 added parameter failOn to Run-AlPipeline to allow builds to fail on warnings
+Issue #1623 Unable to create BC 16.0 container with tests
+Support FilesOnly when generating images
+Use FilesOnly generic image for better performance
+Publish-PerTenantExtensionApps to support bcAuthContext as parameter set (as well as clientId, clientSecret and tenantId for compatibility)
+Add functions New-BcEnvironment, Remove-BcEnvironment and Set-BcEnvironmentApplicationInsightsKey
+Issue #1636 Signing fails in FilesOnly-container
+Added function Convert-BcAppsToRuntimePackages to convert a set of Apps to runtime packages matching a specific BC version and localization
+Added Parameter ContainerName to Sort-AppFilesByDependencies to allow the function to sort runtime packages using Get-NavAppInfo in container
 
 1.0.19
 Move retry algorithm to Download-File

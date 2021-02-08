@@ -11,9 +11,11 @@
  .Parameter credential
   For 15.x containers and later. Credentials for the admin user if using NavUserPassword authentication. User will be prompted if not provided
  .Parameter includeTestLibrariesOnly
-  Only import TestLibraries (do not import Test Codeunits)
+  Only import TestLibrary Apps (do not import Test Apps)
  .Parameter includeTestFrameworkOnly
-  Only import TestFramework (do not import Test Codeunits nor TestLibraries)
+  Only import TestFramework Apps (do not import Test Apps or Test Library apps)
+ .Parameter includeTestRunnerOnly
+  Only import Test Runner (do not import Test Apps, Test Framework Apps or Test Library apps)
  .Parameter testToolkitCountry
   Only import TestToolkit objects for a specific country.
   You must specify the country code that is used in the TestToolkit object name (e.g. CA, US, MX, etc.).
@@ -32,6 +34,11 @@
   Include the doNotUseRuntimePackages switch if you do not want to cache and use the test apps as runtime packages (only 15.x containers)
  .Parameter replaceDependencies
   With this parameter, you can specify a hashtable, describring that the specified dependencies in the apps being published should be replaced
+ .Parameter bcAuthContext
+  Authorization Context created by New-BcAuthContext. By specifying BcAuthContext and environment, the function will import test toolkit to the online Business Central Environment specified
+  Only Test Runner and Test Framework are/will be available in the online Business Central environment
+ .Parameter environment
+  Environment in which you want to import test toolkit.
  .Example
   Import-TestToolkitToBcContainer -containerName test2
   .Example
@@ -46,6 +53,7 @@ function Import-TestToolkitToBcContainer {
         [PSCredential] $credential = $null,
         [switch] $includeTestLibrariesOnly,
         [switch] $includeTestFrameworkOnly,
+        [switch] $includeTestRunnerOnly,
         [switch] $includePerformanceToolkit,
         [string] $testToolkitCountry,
         [switch] $doNotUpdateSymbols,
@@ -88,26 +96,13 @@ function Import-TestToolkitToBcContainer {
 
     if ($bcAuthContext -and $environment) {
         
-        throw "Importing Test Toolkit to Bc Saas not yet supported"
-
-        $appFiles = GetTestToolkitApps -containerName $containerName -includeTestFrameworkOnly:$includeTestFrameworkOnly -includeTestLibrariesOnly:$includeTestLibrariesOnly -includePerformanceToolkit:$includePerformanceToolkit
-        $publishedApps = Get-BcPublishedApps -bcAuthContext $bcAuthContext -environment $environment | Where-Object { $_.state -eq "installed" }
-
+        $appFiles = GetTestToolkitApps -containerName $containerName -includeTestRunnerOnly:$includeTestRunnerOnly -includeTestFrameworkOnly:$includeTestFrameworkOnly -includeTestLibrariesOnly:$includeTestLibrariesOnly -includePerformanceToolkit:$includePerformanceToolkit
         $appFiles | % {
-            $appFile = $_
-
             $appInfo = Invoke-ScriptInBCContainer -containerName $containerName -scriptblock { Param($appFile)
                 Get-NAVAppInfo -Path $appFile
-            } -argumentList $appFile | Where-Object { $_ -isnot [System.String] }
+            } -argumentList $_ | Where-Object { $_ -isnot [System.String] }
 
-            $appExists = $publishedApps | Where-Object { $_.State -eq "installed" -and $appInfo.Publisher -eq $_.Publisher -and $appInfo.Name -eq $_.Name -and $appInfo.Version -eq $_.Version }
-
-            if ($appExists) {
-                Write-Host "Skipping app '$appFile' as it is already installed"
-            }
-            else {
-                Publish-BcContainerApp -containerName $containerName -appFile ":$appFile" -bcAuthContext $bcAuthContext -environment $environment
-            }
+            Install-BcAppFromAppSource -containerName $containerName -bcAuthContext $bcauthcontext -environment $environment -appId $appInfo.AppId -appName $appInfo.Name
         }
         Write-Host -ForegroundColor Green "TestToolkit successfully published"
     }
@@ -140,7 +135,7 @@ function Import-TestToolkitToBcContainer {
                 }
             }
     
-            $appFiles = GetTestToolkitApps -containerName $containerName -includeTestFrameworkOnly:$includeTestFrameworkOnly -includeTestLibrariesOnly:$includeTestLibrariesOnly -includePerformanceToolkit:$includePerformanceToolkit
+            $appFiles = GetTestToolkitApps -containerName $containerName -includeTestRunnerOnly:$includeTestRunnerOnly -includeTestFrameworkOnly:$includeTestFrameworkOnly -includeTestLibrariesOnly:$includeTestLibrariesOnly -includePerformanceToolkit:$includePerformanceToolkit
     
             if (!$doNotUseRuntimePackages) {
                 if ($isBcSandbox) {

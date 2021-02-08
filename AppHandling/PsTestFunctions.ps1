@@ -14,7 +14,7 @@ if (!($clientContextScriptPath)) {
     $clientContextScriptPath = Join-Path $PSScriptRoot "ClientContext.ps1"
 }
 
-. $clientContextScriptPath
+. $clientContextScriptPath -clientDllPath $clientDllPath
 
 function New-ClientContext {
     Param(
@@ -157,7 +157,7 @@ function Get-Tests {
 
     $form = $clientContext.OpenForm($testPage)
     if (!($form)) {
-        throw "Cannot open page $testPage. You might need to import the test toolkit to the container and/or remove the folder $PSScriptRoot and retry. You might also have URL or Company name wrong."
+        throw "Cannot open page $testPage. You might need to import the test toolkit and/or remove the folder $PSScriptRoot and retry. You might also have URL or Company name wrong."
     }
 
     $suiteControl = $clientContext.GetControlByName($form, "CurrentSuiteName")
@@ -169,7 +169,7 @@ function Get-Tests {
         $clientContext.InvokeAction($clientContext.GetActionByName($form, 'ClearTestResults'))
     }
 
-    $repeater = $clientContext.GetControlByType($form, [ClientRepeaterControl])
+    $repeater = $clientContext.GetControlByType($form, [Microsoft.Dynamics.Framework.UI.Client.ClientRepeaterControl])
     $index = 0
     if ($testPage -eq 130455) {
         if ($debugMode) {
@@ -312,6 +312,86 @@ function Run-ConnectionTest {
     Write-Host "Customer list successfully closed"
 }
 
+function Install-AppSourceApp {
+    Param(
+        [ClientContext] $clientContext,
+        [switch] $debugMode,
+        [switch] $connectFromHost,
+        [string] $appId,
+        [string] $appName
+    )
+
+    $dialog = $clientContext.OpenFormWithFilter(2503, "ID IS '$appId'")
+    $bar = $clientContext.GetControlByName($dialog,"ActionBar")
+    $InstallAction = $clientContext.GetActionByName($bar, 'Install')
+    Write-Host "Installing $($appName)"
+    $page = $clientContext.InvokeActionAndCatchForm($InstallAction)
+    if ($page.ControlIdentifier -like "{000009c7-*") {
+        Write-Host -NoNewline "Progress."
+        $statusPage = $clientContext.OpenForm(2508)
+        if (!($statusPage)) {
+            throw "Couldn't open page 2508"
+        }
+        $repeater = $clientContext.GetControlByType($statusPage, [Microsoft.Dynamics.Framework.UI.Client.ClientRepeaterControl])
+        do {
+            Start-Sleep -Seconds 2
+            Write-Host -NoNewline "."
+            $index = 0
+            $clientContext.SelectFirstRow($repeater)
+            $clientContext.Refresh($repeater)
+            $status = "Failed"
+            $row = $null
+            while ($true)
+            {
+                if ($index -ge ($repeater.Offset + $repeater.DefaultViewport.Count))
+                {
+                    $clientContext.ScrollRepeater($repeater, 1)
+                }
+                $rowIndex = $index - $repeater.Offset
+                $index++
+                if ($rowIndex -ge $repeater.DefaultViewport.Count)
+                {
+                    break
+                }
+                $row = $repeater.DefaultViewport[$rowIndex]
+                $nameControl = $clientContext.GetControlByName($row, "Name")
+                $name = $nameControl.StringValue
+                if ($name -like "*$appId*") {
+                    $status = $clientContext.GetControlByName($row, "Status").StringValue
+                    break
+                }
+            }
+        }
+        while ($status -eq "InProgress")
+    
+        if ($row) {
+            if ($status -eq "Completed") {
+                Write-Host -ForegroundColor Green " $status"
+            }
+            else {
+                Write-Host -ForegroundColor Red " $status"
+                $details = $clientContext.InvokeActionAndCatchForm($row)
+                if ($details) {
+                    $summaryControl = $clientContext.GetControlByName($details, "OpDetails")
+                    if ($summaryControl) {
+                        Write-Host -ForegroundColor Red $summaryControl.StringValue
+                    }
+                    $viewDetailsControl = $clientContext.GetControlByName($details, "Details")
+                    if ($viewDetailsControl) {
+                        $clientContext.InvokeSystemAction($viewDetailsControl, "DrillDown")
+                        $detailsControl = $clientContext.GetControlByName($details, "Detailed Message box")
+                        if ($detailsControl -and $detailsControl.StringValue) {
+                            Write-Host -ForegroundColor Red "Error Details: $($detailsControl.StringValue)"
+                        }
+                    }
+                    $clientContext.CloseForm($details)
+                }
+                throw "Could not install $appName"
+            }
+        }
+    }
+}
+
 function Run-Tests {
     Param(
         [ClientContext] $clientContext,
@@ -373,9 +453,9 @@ function Run-Tests {
         $clientContext.InvokeAction($clientContext.GetActionByName($form, 'ClearTestResults'))
     }
 
+    $process = $null
     if (!$connectFromHost) {
-        $process = Get-Process -Name "Microsoft.Dynamics.Nav.Server"
-        if (!($process)) { throw "Cannot find Server process" }
+        $process = Get-Process -Name "Microsoft.Dynamics.Nav.Server" -ErrorAction SilentlyContinue
     }
 
     if ($XUnitResultFileName) {
@@ -430,9 +510,9 @@ function Run-Tests {
 
         while ($true) {
         
-            if (!$connectFromHost) {
+            if ($process) {
                 $cimInstance = Get-CIMInstance Win32_OperatingSystem
-                try { $cpu = "$($process.CPU.ToString("F3",[CultureInfo]::InvariantCulture))" } catch { $cpu = "n/a" }
+                try { $cpu = "$($process.CPU.ToString("F3",[cultureinfo]::InvariantCulture))" } catch { $cpu = "n/a" }
                 try { $mem = "$(($cimInstance.FreePhysicalMemory/1048576).ToString("F1",[CultureInfo]::InvariantCulture))" } catch { $mem = "n/a" }
                 $processinfostart = "{ ""CPU"": ""$cpu"", ""Free Memory (Gb)"": ""$mem"" }"
             }
@@ -495,7 +575,7 @@ function Run-Tests {
                 $JunitTestSuiteProperties = $JUnitDoc.CreateElement("properties")
                 $JUnitTestSuite.AppendChild($JunitTestSuiteProperties) | Out-Null
 
-                if (!$connectfromHost) {
+                if ($process) {
                     $property = $JUnitDoc.CreateElement("property")
                     $property.SetAttribute("name","processinfo.start")
                     $property.SetAttribute("value", $processinfostart)
@@ -651,7 +731,7 @@ function Run-Tests {
                 $JUnitTestSuite.SetAttribute("failures", $failed)
                 $JUnitTestSuite.SetAttribute("skipped", $skipped)
                 $JUnitTestSuite.SetAttribute("time", [Math]::Round($totalduration.TotalSeconds,3).ToString([System.Globalization.CultureInfo]::InvariantCulture))
-                if (!$connectfromHost) {
+                if ($process) {
                     $cimInstance = Get-CIMInstance Win32_OperatingSystem
                     $property = $JUnitDoc.CreateElement("property")
                     $property.SetAttribute("name","processinfo.end")
@@ -670,8 +750,8 @@ function Run-Tests {
             Write-Host "Using repeater based test-runner"
         }
         
-        $filterControl = $clientContext.GetControlByType($form, [ClientFilterLogicalControl])
-        $repeater = $clientContext.GetControlByType($form, [ClientRepeaterControl])
+        $filterControl = $clientContext.GetControlByType($form, [Microsoft.Dynamics.Framework.UI.Client.ClientFilterLogicalControl])
+        $repeater = $clientContext.GetControlByType($form, [Microsoft.Dynamics.Framework.UI.Client.ClientRepeaterControl])
         $index = 0
         if ($testPage -eq 130455) {
             if ($debugMode) {

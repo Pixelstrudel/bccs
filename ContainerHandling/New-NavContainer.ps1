@@ -85,6 +85,9 @@
   Specify a private (or special) generic image to use for the Container OS.
  .Parameter assignPremiumPlan
   Assign Premium plan to admin user
+ .Parameter filesOnly
+  Include this switch to create a filesOnly container. A filesOnly container does not contain SQL Server, IIS or the ServiceTier, it only contains the files from BC in the same locations as a normal container.
+  A FilesOnly container can be used to compile apps and it can be used as a proxy container for an online Business Central environment
  .Parameter multitenant
   Setup container for multitenancy by adding this switch
  .Parameter addFontsFromPath
@@ -333,7 +336,10 @@ function New-BcContainer {
     }
 
     if ($Credential -eq $null -or $credential -eq [System.Management.Automation.PSCredential]::Empty) {
-        if ($auth -eq "Windows") {
+        if ($filesOnly) {
+            $credential = New-Object pscredential -ArgumentList 'admin', (ConvertTo-SecureString -String (GetRandomPassword) -AsPlainText -Force) 
+        }
+        elseif ($auth -eq "Windows") {
             $credential = get-credential -UserName $env:USERNAME -Message "Using Windows Authentication. Please enter your Windows credentials."
         } else {
             $credential = get-credential -Message "Using $auth Authentication. Please enter username/password for the Containter."
@@ -381,7 +387,7 @@ function New-BcContainer {
     
     $hostOsVersion = [System.Version]::Parse("$($os.Version).$UBR")
     $hostOs = "Unknown/Insider build"
-    $bestGenericImageName = Get-BestGenericImageName -onlyMatchingBuilds
+    $bestGenericImageName = Get-BestGenericImageName -onlyMatchingBuilds -filesOnly:$filesOnly
 
     $isServerHost = $os.ProductType -eq 3
 
@@ -537,7 +543,8 @@ function New-BcContainer {
                 -includeTestLibrariesOnly:$includeTestLibrariesOnly `
                 -includePerformanceToolkit:$includePerformanceToolkit `
                 -skipIfImageAlreadyExists:(!$forceRebuild) `
-                -allImages $allImages
+                -allImages $allImages `
+                -filesOnly:$filesOnly
 
             if (-not ($allImages | Where-Object { $_ -eq $imageName })) {
                 $allImages += $imageName
@@ -623,7 +630,7 @@ function New-BcContainer {
                 $imageName = $useGenericImage
             }
             else {
-                $imageName = Get-BestGenericImageName
+                $imageName = Get-BestGenericImageName -filesOnly:$filesOnly
             }
         }
         elseif ("$dvdPath" -ne "") {
@@ -631,7 +638,7 @@ function New-BcContainer {
                 $imageName = $useGenericImage
             }
             else {
-                $imageName = Get-BestGenericImageName
+                $imageName = Get-BestGenericImageName -filesOnly:$filesOnly
             }
         } elseif (Test-BcContainer -containerName $bcContainerHelperConfig.defaultContainerName) {
             $artifactUrl = Get-BcContainerArtifactUrl -containerName $bcContainerHelperConfig.defaultContainerName
@@ -640,7 +647,7 @@ function New-BcContainer {
                     $imageName = $useGenericImage
                 }
                 else {
-                    $imageName = Get-BestGenericImageName
+                    $imageName = Get-BestGenericImageName -filesOnly:$filesOnly
                 }
             }
             else {
@@ -1316,9 +1323,7 @@ function New-BcContainer {
         }
     }
 
-    if ($filesOnly) {
-        $parameters += "--env filesOnly=$true"
-    }
+    $parameters += "--env filesOnly=$filesOnly"
 
     if ($memoryLimit) {
         $parameters += "--memory $memoryLimit"
@@ -1710,7 +1715,7 @@ if (-not `$restartingInstance) {
             Download-File -sourceUrl 'https://bcdocker.blob.core.windows.net/public/14.10.40471.0-Patch-Microsoft.Dynamics.Nav.Ide.psm1' -destinationFile $idepsm
             Invoke-ScriptInBcContainer -containerName $containerName -scriptblock { Param($idepsm)
                 Copy-Item -Path $idepsm -Destination 'C:\Program Files (x86)\Microsoft Dynamics NAV\140\RoleTailored Client\Microsoft.Dynamics.Nav.Ide.psm1' -Force
-            } -argumentList $idepsm
+            } -argumentList (Get-BcContainerPath -containerName $containerName -path $sidepsm)
             Remove-BcContainerSession -containerName $containerName
         }
     
@@ -1724,7 +1729,7 @@ if (-not `$restartingInstance) {
             Write-Host "Patching .app files in C:\Applications\BaseApp\Test due to issue #925"
             Invoke-ScriptInBcContainer -containerName $containerName -scriptblock { Param($zipName, $devCountry)
                 Copy-Item -Path (Join-Path $zipName "$devCountry\*.app") -Destination "c:\Applications\BaseApp\Test" -Force
-            } -argumentList $zipName, $devcountry
+            } -argumentList (Get-BcContainerPath -containerName $containerName -path $zipName), $devcountry
         }
     
         $sqlCredential = $databaseCredential

@@ -1,13 +1,24 @@
 ﻿<# 
  .Synopsis
-  Preview function for retrieving Bc Published Apps from Environment
+  Function for retrieving Published AppSource Apps from an online Business Central environment
  .Description
-  Preview function for retrieving Bc Published Apps from Environment
+  Function for retrieving Published AppSource Apps from an online Business Central environment
+  Wrapper for https://docs.microsoft.com/en-us/dynamics365/business-central/dev-itpro/administration/administration-center-api#get-installed-apps
+ .Parameter bcAuthContext
+  Authorization Context created by New-BcAuthContext.
+ .Parameter applicationFamily
+  Application Family in which the environment is located. Default is BusinessCentral.
+ .Parameter environment
+  Environment from which you want to return the published Apps.
+ .Example
+  $authContext = New-BcAuthContext -includeDeviceLogin
+  Get-BcPublishedApps -bcAuthContext $authContext -environment "Sandbox"
 #>
 function Get-BcPublishedApps {
     Param(
         [Parameter(Mandatory=$true)]
         [Hashtable] $bcAuthContext,
+        [string] $applicationFamily = "BusinessCentral",
         [Parameter(Mandatory=$true)]
         [string] $environment
     )
@@ -15,6 +26,11 @@ function Get-BcPublishedApps {
     $bcAuthContext = Renew-BcAuthContext -bcAuthContext $bcAuthContext
     $bearerAuthValue = "Bearer $($bcAuthContext.AccessToken)"
     $headers = @{ "Authorization" = $bearerAuthValue }
-    (Invoke-RestMethod -Method Get -UseBasicParsing -Uri "https://api.businesscentral.dynamics.com/admin/v2.3/applications/BusinessCentral/environments/$environment/apps" -Headers $headers).Value
+    try {
+        (Invoke-RestMethod -Method Get -UseBasicParsing -Uri "https://api.businesscentral.dynamics.com/admin/v2.3/applications/$applicationFamily/environments/$environment/apps" -Headers $headers).Value
+    }
+    catch {
+        throw (GetExtenedErrorMessage $_.Exception)
+    }
 }
 Export-ModuleMember -Function Get-BcPublishedApps

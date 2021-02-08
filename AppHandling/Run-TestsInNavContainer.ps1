@@ -52,6 +52,10 @@
   Include this switch to output debug information if running the tests fails.
  .Parameter usePublicWebBaseUrl
   Connect to the public Url and not to localhost
+ .Parameter bcAuthContext
+  Authorization Context created by New-BcAuthContext. By specifying BcAuthContext and environment, the function will run tests on the online Business Central Environment specified
+ .Parameter environment
+  Environment to use for the running tests
  .Parameter restartContainerAndRetry
   Include this switch to restart container and retry the operation (everything) on non-recoverable errors.
   This is NOT test failures, but more things like out of memory, communication errors or that kind.
@@ -108,59 +112,103 @@ function Run-TestsInBcContainer {
         [switch] $restartContainerAndRetry,
         [switch] $usePublicWebBaseUrl,
         [string] $useUrl = "",
-        [switch] $connectFromHost
+        [switch] $connectFromHost,
+        [Hashtable] $bcAuthContext,
+        [string] $environment = "sand2"
     )
     
+    $customConfig = Get-BcContainerServerConfiguration -ContainerName $containerName
     $navversion = Get-BcContainerNavversion -containerOrImageName $containerName
     $version = [System.Version]($navversion.split('-')[0])
 
-    $useTraefik = $false
-    $inspect = docker inspect $containerName | ConvertFrom-Json
-    if ($inspect.Config.Labels.psobject.Properties.Match('traefik.enable').Count -gt 0) {
-        if ($inspect.config.Labels.'traefik.enable' -eq "true") {
-            $usePublicWebBaseUrl = ($useUrl -eq "")
-            $useTraefik = $true
+    if ($bcAuthContext) {
+        $response = Invoke-RestMethod -Method Get -Uri "https://businesscentral.dynamics.com/$($bcAuthContext.tenantID)/$environment/deployment/url"
+        if($response.status -ne 'Ready') {
+            throw "environment not ready, status is $($response.status)"
         }
+        $useUrl = $response.data.Split('?')[0]
+        $tenant = ($response.data.Split('?')[1]).Split('=')[1]
+
+        $bcAuthContext = Renew-BcAuthContext $bcAuthContext
+        $accessToken = $bcAuthContext.accessToken
+        $credential = New-Object pscredential -ArgumentList 'freddyk', (ConvertTo-SecureString -String 'P@ssword1' -AsPlainText -Force)
+
+        if ($testPage) {
+            throw "You cannot specify testPage when running tests in an Online tenant"
+        }
+        $testPage = 130455
+    }
+    else {
+        $clientServicesCredentialType = $customConfig.ClientServicesCredentialType
+
+        $useTraefik = $false
+        $inspect = docker inspect $containerName | ConvertFrom-Json
+        if ($inspect.Config.Labels.psobject.Properties.Match('traefik.enable').Count -gt 0) {
+            if ($inspect.config.Labels.'traefik.enable' -eq "true") {
+                $usePublicWebBaseUrl = ($useUrl -eq "")
+                $useTraefik = $true
+            }
+        }
+        if ($usePublicWebBaseUrl -and $useUrl -ne "") {
+            throw "You cannot specify usePublicWebBaseUrl and useUrl at the same time"
+        }
+
+        if ($customConfig.PublicWebBaseUrl -eq "") {
+            throw "Container $containerName needs to include the WebClient in order to run tests (PublicWebBaseUrl is blank)"
+        }
+
+        if ($useUrl -eq "") {
+            if ([bool]($customConfig.PSobject.Properties.name -eq "EnableTaskScheduler")) {
+                if ($customConfig.EnableTaskScheduler -eq "True") {
+                    Write-Host -ForegroundColor Red "WARNING: TaskScheduler is running in the container, this can lead to test failures. Specify -EnableTaskScheduler:`$false to disable Task Scheduler."
+                }
+            }
+        }
+        if (!$testPage) {
+            if ($version.Major -ge 15) {
+                $testPage = 130455
+            }
+            else {
+                $testPage = 130409
+            }
+        }
+
+        if ($clientServicesCredentialType -eq "Windows" -and "$CompanyName" -eq "") {
+            $myName = $myUserName.SubString($myUserName.IndexOf('\')+1)
+            Get-BcContainerBcUser -containerName $containerName | Where-Object { $_.UserName.EndsWith("\$MyName", [System.StringComparison]::InvariantCultureIgnoreCase) -or $_.UserName -eq $myName } | % {
+                $companyName = $_.Company
+            }
+        }
+    
+        Invoke-ScriptInBCContainer -containerName $containerName -scriptBlock { Param($timeoutStr)
+            $webConfigFile = "C:\inetpub\wwwroot\$WebServerInstance\web.config"
+            try {
+                $webConfig = [xml](Get-Content $webConfigFile)
+                $node = $webConfig.configuration.'system.webServer'.aspNetCore.Attributes.GetNamedItem('requestTimeout')
+                if (!($node)) {
+                    $node = $webConfig.configuration.'system.webServer'.aspNetCore.Attributes.Append($webConfig.CreateAttribute('requestTimeout'))
+                }
+                if ($node.Value -ne $timeoutStr) {
+                    $node.Value = $timeoutStr
+                    $webConfig.Save($webConfigFile)
+                }
+            }
+            catch {
+                Write-Host "WARNING: could not set requestTimeout in web.config"
+            }
+        } -argumentList $interactionTimeout.ToString()
     }
 
     $PsTestToolFolder = Join-Path $extensionsFolder "$containerName\PsTestTool"
     $PsTestFunctionsPath = Join-Path $PsTestToolFolder "PsTestFunctions.ps1"
     $ClientContextPath = Join-Path $PsTestToolFolder "ClientContext.ps1"
     $fobfile = Join-Path $PsTestToolFolder "PSTestToolPage.fob"
-    $serverConfiguration = Get-BcContainerServerConfiguration -ContainerName $containerName
-    $clientServicesCredentialType = $serverConfiguration.ClientServicesCredentialType
-
-    if ($usePublicWebBaseUrl -and $useUrl -ne "") {
-        throw "You cannot specify usePublicWebBaseUrl and useUrl at the same time"
-    }
-
-    if ($serverConfiguration.PublicWebBaseUrl -eq "") {
-        throw "Container $containerName needs to include the WebClient in order to run tests (PublicWebBaseUrl is blank)"
-    }
-
-    if ($useUrl -eq "") {
-        if ([bool]($serverConfiguration.PSobject.Properties.name -eq "EnableTaskScheduler")) {
-            if ($serverConfiguration.EnableTaskScheduler -eq "True") {
-                Write-Host -ForegroundColor Red "WARNING: TaskScheduler is running in the container, this can lead to test failures. Specify -EnableTaskScheduler:`$false to disable Task Scheduler."
-            }
-        }
-    }
-
-    if (!$testPage) {
-        if ($version.Major -ge 15) {
-            $testPage = 130455
-        }
-        else {
-            $testPage = 130409
-        }
-    }
 
     if ($testPage -eq 130455) {
         if ($testgroup -ne "*" -and $testgroup -ne "") {
             Write-Host -ForegroundColor Red "WARNING: TestGroups are not supported in Business Central 15.x and later"
         }
     }
-
 
     If (!(Test-Path -Path $PsTestToolFolder -PathType Container)) {
         try {
@@ -194,31 +242,6 @@ function Run-TestsInBcContainer {
         }
     }
 
-    if ($clientServicesCredentialType -eq "Windows" -and "$CompanyName" -eq "") {
-        $myName = $myUserName.SubString($myUserName.IndexOf('\')+1)
-        Get-BcContainerBcUser -containerName $containerName | Where-Object { $_.UserName.EndsWith("\$MyName", [System.StringComparison]::InvariantCultureIgnoreCase) -or $_.UserName -eq $myName } | % {
-            $companyName = $_.Company
-        }
-    }
-
-    Invoke-ScriptInBCContainer -containerName $containerName -scriptBlock { Param($timeoutStr)
-        $webConfigFile = "C:\inetpub\wwwroot\$WebServerInstance\web.config"
-        try {
-            $webConfig = [xml](Get-Content $webConfigFile)
-            $node = $webConfig.configuration.'system.webServer'.aspNetCore.Attributes.GetNamedItem('requestTimeout')
-            if (!($node)) {
-                $node = $webConfig.configuration.'system.webServer'.aspNetCore.Attributes.Append($webConfig.CreateAttribute('requestTimeout'))
-            }
-            if ($node.Value -ne $timeoutStr) {
-                $node.Value = $timeoutStr
-                $webConfig.Save($webConfigFile)
-            }
-        }
-        catch {
-            Write-Host "WARNING: could not set requestTimeout in web.config"
-        }
-    } -argumentList $interactionTimeout.ToString()
-
     while ($true) {
         try
         {
@@ -238,14 +261,12 @@ function Run-TestsInBcContainer {
                     }
                 } -argumentList $newtonSoftDllPath, $clientDllPath
     
-                $config = Get-BcContainerServerConfiguration -ContainerName $containerName
                 if ($useUrl) {
                     $publicWebBaseUrl = $useUrl.TrimEnd('/')
                 }
                 else {
-                    $publicWebBaseUrl = $config.PublicWebBaseUrl.TrimEnd('/')
+                    $publicWebBaseUrl = $customConfig.PublicWebBaseUrl.TrimEnd('/')
                 }
-                $clientServicesCredentialType = $config.ClientServicesCredentialType
                 $serviceUrl = "$publicWebBaseUrl/cs?tenant=$tenant"
     
                 if ($accessToken) {
@@ -339,7 +360,11 @@ function Run-TestsInBcContainer {
                         $serviceUrl = "$($Uri.Scheme)://localhost:$($Uri.Port)/$($Uri.PathAndQuery)/cs?tenant=$tenant"
                     }
             
-                    if ($clientServicesCredentialType -eq "Windows") {
+                    if ($accessToken) {
+                        $clientServicesCredentialType = "AAD"
+                        $credential = New-Object pscredential $credential.UserName, (ConvertTo-SecureString -String $accessToken -AsPlainText -Force)
+                    }
+                    elseif ($clientServicesCredentialType -eq "Windows") {
                         $windowsUserName = whoami
                         $NavServerUser = Get-NAVServerUser -ServerInstance $ServerInstance -tenant $tenant -ErrorAction Ignore | Where-Object { $_.UserName -eq $windowsusername }
                         if (!($NavServerUser)) {
@@ -347,10 +372,6 @@ function Run-TestsInBcContainer {
                             New-NavServerUser -ServerInstance $ServerInstance -tenant $tenant -WindowsAccount $windowsusername
                             New-NavServerUserPermissionSet -ServerInstance $ServerInstance -tenant $tenant -WindowsAccount $windowsusername -PermissionSetId SUPER
                         }
-                    }
-                    elseif ($accessToken) {
-                        $clientServicesCredentialType = "AAD"
-                        $credential = New-Object pscredential $credential.UserName, (ConvertTo-SecureString -String $accessToken -AsPlainText -Force)
                     }
             
                     if ($companyName) {
