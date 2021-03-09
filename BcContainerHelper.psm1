@@ -37,6 +37,7 @@ function Get-ContainerHelperConfig {
             "digestAlgorithm" = "SHA256"
             "timeStampServer" = "http://timestamp.digicert.com"
             "sandboxContainersAreMultitenantByDefault" = $true
+            "useSharedEncryptionKeys" = $true
             "mapCountryCode" = [PSCustomObject]@{
                 "ae" = "w1"
                 "br" = "w1"
@@ -67,7 +68,7 @@ function Get-ContainerHelperConfig {
                 "za" = "w1"
             }
         }
-        $bcContainerHelperConfigFile = Join-Path $bcContainerHelperConfig.HostHelperFolder "BcContainerHelper.config.json"
+        $bcContainerHelperConfigFile = "C:\ProgramData\BcContainerHelper\BcContainerHelper.config.json"
         if (Test-Path $bcContainerHelperConfigFile) {
             $savedConfig = Get-Content $bcContainerHelperConfigFile | ConvertFrom-Json
             $keys = $bcContainerHelperConfig.Keys | % { $_ }
@@ -140,8 +141,10 @@ if (!$silent) {
 $sessions = @{}
 
 if (!(Test-Path -Path $extensionsFolder -PathType Container)) {
-    New-Item -Path $hostHelperFolder -ItemType Container -Force -ErrorAction Ignore | Out-Null
-    New-Item -Path $extensionsFolder -ItemType Container -Force -ErrorAction Ignore | Out-Null
+    if (!(Test-Path -Path $hostHelperFolder -PathType Container)) {
+        New-Item -Path $hostHelperFolder -ItemType Container -Force | Out-Null
+    }
+    New-Item -Path $extensionsFolder -ItemType Container -Force | Out-Null
 
     if (!$isAdministrator) {
         $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($myUsername,'FullControl', 3, 'InheritOnly', 'Allow')
@@ -252,7 +255,6 @@ Check-BcContainerHelperPermissions -Silent
 . (Join-Path $PSScriptRoot "AppHandling\Run-AlPipeline.ps1")
 . (Join-Path $PSScriptRoot "AppHandling\Run-AlValidation.ps1")
 . (Join-Path $PSScriptRoot "AppHandling\Run-AlCops.ps1")
-. (Join-Path $PSScriptRoot "AppHandling\Publish-BuildOutputToStorage.ps1")
 
 # Tenant Handling functions
 . (Join-Path $PSScriptRoot "TenantHandling\New-NavContainerTenant.ps1")
@@ -310,6 +312,7 @@ Check-BcContainerHelperPermissions -Silent
 . (Join-Path $PSScriptRoot "Misc\Add-FontsToNavContainer.ps1")
 . (Join-Path $PSScriptRoot "Misc\Set-BcContainerFeatureKeys.ps1")
 . (Join-Path $PSScriptRoot "Misc\Import-PfxCertificateToNavContainer.ps1")
+. (Join-Path $PSScriptRoot "Misc\Get-PlainText.ps1")
 
 # Company Handling functions
 . (Join-Path $PSScriptRoot "CompanyHandling\Copy-CompanyInNavContainer.ps1")
@@ -324,6 +327,13 @@ Check-BcContainerHelperPermissions -Silent
 
 # Symbol Handling
 . (Join-Path $PSScriptRoot "SymbolHandling\Generate-SymbolsInNavContainer.ps1")
+
+# PackageHandling
+. (Join-Path $PSScriptRoot "PackageHandling\Resolve-DependenciesFromAzureFeed.ps1")
+. (Join-Path $PSScriptRoot "PackageHandling\Publish-BuildOutputToAzureFeed.ps1")
+. (Join-Path $PSScriptRoot "PackageHandling\Publish-BuildOutputToStorage.ps1")
+. (Join-Path $PSScriptRoot "PackageHandling\Get-AzureFeedWildcardVersion.ps1")
+. (Join-Path $PSScriptRoot "PackageHandling\Install-AzDevops.ps1")
 
 # Business Central Container Script
 $bccsFolder = Join-Path $env:APPDATA ".bccs"

@@ -24,6 +24,8 @@
   When you are spinning up a Generic image, you can specify the platform version (default is the version of the executables)
  .Parameter locale
   Optional locale for the container. Default is to deduct the locale from the country version of the container.
+ .Parameter setServiceTierUserLocale
+  Include this switch if you want to set the locale for the Service Tier User (NT AUTHORITY\SYSTEM)
  .Parameter licenseFile
   Path or Secure Url of the licenseFile you want to use
  .Parameter credential
@@ -146,6 +148,8 @@
   Add this switch if you want to uninstall all extensions and remove the base app from the container
  .Parameter useNewDatabase
   Add this switch if you want to create a new and empty database in the container
+ .Parameter runSandboxAsOnPrem
+  This parameter will attempt to run sandbox artifacts as onprem (will only work with version 18 and later)
  .Parameter doNotCopyEntitlements
   Specify this parameter to avoid copying entitlements when using -useNewDatabase
  .Parameter copyTables
@@ -190,6 +194,7 @@ function New-BcContainer {
         [Alias('navDvdPlatform')]
         [string] $dvdPlatform = "",
         [string] $locale = "",
+        [switch] $setServiceTierUserLocale,
         [string] $licenseFile = "",
         [PSCredential] $Credential = $null,
         [string] $authenticationEMail = "",
@@ -251,6 +256,7 @@ function New-BcContainer {
         [switch] $useTraefik,
         [switch] $useCleanDatabase,
         [switch] $useNewDatabase,
+        [switch] $runSandboxAsOnPrem,
         [switch] $doNotCopyEntitlements,
         [string[]] $copyTables = @(),
         [switch] $dumpEventLog,
@@ -474,6 +480,7 @@ function New-BcContainer {
     # Remove if it already exists
     Remove-BcContainer $containerName
 
+    $createTenantAndUserInExternalDatabase = $false
     if ($artifactUrl) {
         # When using artifacts, you always use best container os - no need to replatform
         $useBestContainerOS = $false
@@ -485,8 +492,13 @@ function New-BcContainer {
         $appManifestPath = Join-Path $appArtifactPath "manifest.json"
         $appManifest = Get-Content $appManifestPath | ConvertFrom-Json
 
+        if ($runSandboxAsOnPrem -and $appManifest.version -lt [Version]"18.0.0.0") {
+            $runSandboxAsOnPrem = $false
+            Write-Host -ForegroundColor Red "Cannot run sandbox artifacts before version 18 as onprem"
+        }
+
         $bcstyle = "onprem"
-        if ($appManifest.PSObject.Properties.name -eq "isBcSandbox") {
+        if (!$runSandboxAsOnPrem -and ($appManifest.PSObject.Properties.name -eq "isBcSandbox")) {
             if ($appManifest.isBcSandbox) {
                 $bcstyle = "sandbox"
                 if (!($PSBoundParameters.ContainsKey('multitenant')) -and !$skipDatabase) {
@@ -496,11 +508,13 @@ function New-BcContainer {
         }
 
         if ($databaseServer -ne "" -and $databasePrefix -ne "" -and $databaseName -ne "" -and $replaceExternalDatabases) {
-            if ($bcstyle = "sandbox" -and (!($PSBoundParameters.ContainsKey('multitenant')))) {
+            if ($bcstyle -eq "sandbox" -and (!($PSBoundParameters.ContainsKey('multitenant')))) {
                 $multitenant = $bcContainerHelperConfig.sandboxContainersAreMultitenantByDefault
             }
             Remove-BcDatabase -databaseServer $databaseServer -databaseInstance $databaseInstance -databaseName "$($databasePrefix)%"
-            Restore-BcDatabaseFromArtifacts -artifactUrl $artifactUrl -databaseServer $databaseServer -databaseInstance $databaseInstance -databasePrefix $databasePrefix -databaseName $databaseName -multitenant:$multitenant -async
+            Restore-BcDatabaseFromArtifacts -artifactUrl $artifactUrl -databaseServer $databaseServer -databaseInstance $databaseInstance -databasePrefix $databasePrefix -databaseName $databaseName -multitenant:$multitenant -bakFile $bakFile -async
+            $createTenantAndUserInExternalDatabase = $true
+            $bakFile = ""
             $successFileName = Join-Path $bcContainerHelperConfig.containerHelperFolder "$($databasePrefix)databasescreated.txt"
             $myscripts += @( @{ "SetupDatabase.ps1" = "if (!(Test-Path ""$successFileName"")) { Write-Host -NoNewline 'Waiting for database creation to finish'; while (!(Test-Path ""$successFileName"")) { Start-Sleep -seconds 1; Write-Host -NoNewLine '.' }; Write-Host }; . 'c:\run\setupDatabase.ps1'" } ) `
         }
@@ -508,6 +522,9 @@ function New-BcContainer {
 
     Write-Host "Fetching all docker images"
     $allImages = @(docker images --format "{{.Repository}}:{{.Tag}}")
+
+    Write-Host "Fetching all docker volumes"
+    $allVolumes = @(docker volume ls --format "{{.Mountpoint}}|{{.Name}}")
 
     if ($imageName -ne "") {
 
@@ -795,8 +812,7 @@ function New-BcContainer {
     }
 
     if ($artifactUrl) {
-
-        $parameters += "--volume ""$($downloadsPath):c:\dl"""
+        $parameters += getVolumeMountParameter -volumes $allVolumes -hostPath $downloadsPath -containerPath "c:\dl"
 
         $artifactPaths = Download-Artifacts -artifactUrl $artifactUrl -includePlatform -forceRedirection:$alwaysPull
         $appArtifactPath = $artifactPaths[0]
@@ -805,8 +821,13 @@ function New-BcContainer {
         $appManifestPath = Join-Path $appArtifactPath "manifest.json"
         $appManifest = Get-Content $appManifestPath | ConvertFrom-Json
 
+        if ($runSandboxAsOnPrem -and $appManifest.version -lt [Version]"18.0.0.0") {
+            $runSandboxAsOnPrem = $false
+            Write-Host -ForegroundColor Red "Cannot run sandbox artifacts before version 18 as onprem"
+        }
+
         $bcstyle = "onprem"
-        if ($appManifest.PSObject.Properties.name -eq "isBcSandbox") {
+        if (!$runSandboxAsOnPrem -and ($appManifest.PSObject.Properties.name -eq "isBcSandbox")) {
             if ($appManifest.isBcSandbox) {
                 $bcstyle = "sandbox"
                 if (!($PSBoundParameters.ContainsKey('multitenant')) -and !$skipDatabase) {
@@ -826,6 +847,9 @@ function New-BcContainer {
         }
         if ($bcStyle -eq "sandbox") {
             $parameters += @("--env isBcSandbox=Y")
+        }
+        else {
+            $parameters += @("--env isBcSandbox=N")
         }
 
         $dvdVersion = $appmanifest.Version
@@ -1290,7 +1314,7 @@ function New-BcContainer {
                     "--env locale=$locale",
                     "--env databaseServer=""$databaseServer""",
                     "--env databaseInstance=""$databaseInstance""",
-                    "--volume ""$($hostHelperFolder):$containerHelperFolder""",
+                    (getVolumeMountParameter -volumes $allVolumes -hostPath $hostHelperFolder -containerPath $containerHelperFolder),
                     "--volume ""$($myFolder):C:\Run\my""",
                     "--isolation $isolation",
                     "--restart $restart"
@@ -1446,7 +1470,7 @@ Get-NavServerUser -serverInstance $ServerInstance -tenant default |? LicenseType
     }
 
     if ("$dvdPath" -ne "") {
-        $parameters += "--volume ""$($dvdPath):c:\NAVDVD"""
+        $parameters += getVolumeMountParameter -volumes $allVolumes -hostPath $dvdPath -containerPath "C:\NAVDVD"
     }
 
     if (!(Test-Path -Path "$myfolder\SetupVariables.ps1")) {
@@ -1488,6 +1512,7 @@ if ($multitenant) {
         $restPart = "/${containerName}rest" 
         $soapPart = "/${containerName}soap"
         $devPart = "/${containerName}dev"
+        $snapPart = "/${containerName}snap"
         $dlPart = "/${containerName}dl"
         $webclientPart = "/$containerName"
 
@@ -1496,6 +1521,7 @@ if ($multitenant) {
         $soapUrl = $baseUrl + $soapPart
         $webclientUrl = $baseUrl + $webclientPart
         $devUrl = $baseUrl + $devPart
+        $snapUrl = $baseUrl + $snapPart
         $dlUrl = $baseUrl + $dlPart
 
         $customNavSettings += @("PublicODataBaseUrl=$restUrl/odata","PublicSOAPBaseUrl=$soapUrl/ws","PublicWebBaseUrl=$webclientUrl")
@@ -1511,6 +1537,7 @@ if ($multitenant) {
         $soapRule="PathPrefix:${soapPart};ReplacePathRegex: ^${soapPart}(.*) /$ServerInstance`$1"
         $restRule="PathPrefix:${restPart};ReplacePathRegex: ^${restPart}(.*) /$ServerInstance`$1"
         $devRule="PathPrefix:${devPart};ReplacePathRegex: ^${devPart}(.*) /$ServerInstance`$1"
+        $snapRule="PathPrefix:${snapPart};ReplacePathRegex: ^${snapPart}(.*) /$ServerInstance`$1"
         $dlRule="PathPrefixStrip:${dlPart}"
 
         $traefikHostname = $publicDnsName.Split(".")[0]
@@ -1536,6 +1563,8 @@ if ($multitenant) {
                                    "-l `"traefik.rest.port=7048`"",
                                    "-l `"traefik.dev.frontend.rule=$devRule`"", 
                                    "-l `"traefik.dev.port=7049`"",
+                                   "-l `"traefik.snap.frontend.rule=$snapRule`"", 
+                                   "-l `"traefik.snap.port=7083`"",
                                    "-l `"traefik.dl.frontend.rule=$dlRule`"", 
                                    "-l `"traefik.dl.port=8080`"",
                                    "-l `"traefik.dl.protocol=http`"",
@@ -1596,6 +1625,10 @@ if (-not `$restartingInstance) {
 
     Write-Host "Creating container $containerName from image $imageName"
 
+    $sharedEncryptionKeyFile = ""
+    $containerEncryptionKeyFile = Join-Path $myFolder "DynamicsNAV.key"
+    $encryptionKeyExists = Test-Path $containerEncryptionKeyFile
+
     $passwordKeyFile = "$myfolder\aes.key"
     $passwordKey = New-Object Byte[] 16
     [Security.Cryptography.RNGCryptoServiceProvider]::Create().GetBytes($passwordKey)
@@ -1618,6 +1651,17 @@ if (-not `$restartingInstance) {
                              "--env databaseSecurePassword=$encDatabasePassword"
                              "--env encryptionSecurePassword=$encDatabasePassword"
                             )
+
+            if ("$databaseServer" -ne "" -and $bcContainerHelperConfig.useSharedEncryptionKeys -and !$encryptionKeyExists) {
+                $sharedEncryptionKeyFile = Join-Path $hostHelperFolder "EncryptionKeys\$(-join [security.cryptography.sha256managed]::new().ComputeHash([Text.Encoding]::Utf8.GetBytes(([System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($databaseCredential.Password))))).ForEach{$_.ToString("X2")})\DynamicsNAV.key"
+                if (Test-Path $sharedEncryptionKeyFile) {
+                    Write-Host "Using Shared Encryption Key file"
+                    Copy-Item -Path $sharedEncryptionKeyFile -Destination $containerEncryptionKeyFile
+                }
+                else {
+                    New-Item -Path ([System.IO.Path]::GetDirectoryName($sharedEncryptionKeyFile)) -ItemType Directory | Out-Null
+                }
+            }
         }
         
         $parameters += $additionalParameters
@@ -1626,6 +1670,11 @@ if (-not `$restartingInstance) {
             return
         }
         Wait-BcContainerReady $containerName -timeout $timeout
+
+        if ($sharedEncryptionKeyFile -and !(Test-Path $sharedEncryptionKeyFile)) {
+            Write-Host "Storing Container Encryption Key file"
+            Copy-Item -Path $containerEncryptionKeyFile -Destination $sharedEncryptionKeyFile
+        }
     } finally {
         Remove-Item -Path $passwordKeyFile -Force -ErrorAction Ignore
     }
@@ -1663,6 +1712,10 @@ if (-not `$restartingInstance) {
                     Write-Host -ForegroundColor Yellow "WARNING: Unable to set TimeZone to $TimeZoneId, TimeZone is $OldTimeZoneId"
                 }
             } -argumentList $TimeZoneId
+        }
+        if ($setServiceTierUserLocale) {
+            Write-Host "Set locale for Service Tier User to $locale and restart Service Tier"
+            docker exec --user "NT AUTHORITY\SYSTEM" $containerName powershell.exe "set-culture '$locale'; . 'c:\run\prompt.ps1' -silent; . 'c:\run\serviceSettings.ps1'; Set-NavServerInstance -ServerInstance `$serverInstance -restart"
         }
     
         if ($useSSL -and $installCertificateOnHost) {
@@ -1705,17 +1758,24 @@ if (-not `$restartingInstance) {
                 
             }
             
-            New-DesktopShortcut -Name "$containerName Command Prompt" -TargetPath "CMD.EXE" -Arguments "/C docker.exe exec -it $containerName cmd" -Shortcuts $shortcuts
-            New-DesktopShortcut -Name "$containerName PowerShell Prompt" -TargetPath "CMD.EXE" -Arguments "/C docker.exe exec -it $containerName powershell -noexit c:\run\prompt.ps1" -Shortcuts $shortcuts
+            $vs = "Business Central"
+            if ($version.Major -le 14) {
+                $vs = "NAV"
+            }
+            $cmdPrompt = "/S /K ""prompt [$($containerName.ToUpperInvariant())] `$p`$g & echo Welcome to the $vs Container Command prompt & echo Microsoft Windows Version $($containerOsVersion.ToString())"
+            $psPrompt = """function prompt {'[$($containerName.ToUpperInvariant())] PS '+`$executionContext.SessionState.Path.CurrentLocation+('>'*(`$nestedPromptLevel+1))+' '}; Write-Host 'Welcome to the $vs Container PowerShell prompt'; Write-Host 'Microsoft Windows Version $($containerOsVersion.ToString())'; Write-Host 'Windows PowerShell Version $($PSVersionTable.psversion.ToString())'; Write-Host; . 'c:\run\prompt.ps1' -silent"""
+
+            New-DesktopShortcut -Name "$containerName Command Prompt" -TargetPath "CMD.EXE" -Arguments "/C docker.exe exec -it $containerName cmd $cmdPrompt" -Shortcuts $shortcuts
+            New-DesktopShortcut -Name "$containerName PowerShell Prompt" -TargetPath "CMD.EXE" -Arguments "/C docker.exe exec -it $containerName powershell -noexit $psPrompt" -Shortcuts $shortcuts
         }
-    
+
         if ($version -eq [System.Version]"14.10.40471.0") {
             Write-Host "Patching Microsoft.Dynamics.Nav.Ide.psm1 in container due to issue #859"
             $idepsm = Join-Path $containerFolder "14.10.40471.0-Patch-Microsoft.Dynamics.Nav.Ide.psm1"
             Download-File -sourceUrl 'https://bcdocker.blob.core.windows.net/public/14.10.40471.0-Patch-Microsoft.Dynamics.Nav.Ide.psm1' -destinationFile $idepsm
             Invoke-ScriptInBcContainer -containerName $containerName -scriptblock { Param($idepsm)
                 Copy-Item -Path $idepsm -Destination 'C:\Program Files (x86)\Microsoft Dynamics NAV\140\RoleTailored Client\Microsoft.Dynamics.Nav.Ide.psm1' -Force
-            } -argumentList (Get-BcContainerPath -containerName $containerName -path $sidepsm)
+            } -argumentList (Get-BcContainerPath -containerName $containerName -path $idepsm)
             Remove-BcContainerSession -containerName $containerName
         }
     
@@ -1976,7 +2036,7 @@ if (-not `$restartingInstance) {
                 New-BcContainerTenant -containerName $containerName -tenantId default -allowAppDatabaseWrite:$allowAppDatabaseWrite
             }
         }
-        elseif ($artifactUrl -ne "" -and $databaseServer -ne "" -and $databasePrefix -ne "" -and $databaseName -ne "" -and $replaceExternalDatabases) {
+        elseif ($createTenantAndUserInExternalDatabase) {
             if ($multitenant) {
                 $allowAppDatabaseWrite = ($additionalparameters | Where-Object { $_ -like "*defaultTenantHasAllowAppDatabaseWrite=Y" }) -ne $null
                 New-NavContainerTenant `
@@ -2012,6 +2072,7 @@ if (-not `$restartingInstance) {
             Write-Host "SOAP WebServices:  $soapUrl"
             Write-Host "OData WebServices: $restUrl"
             Write-Host "Dev Service:       $devUrl"
+            Write-Host "Snapshot Service:  $snapUrl"
             Write-Host "File downloads:    $dlUrl"
         }
     

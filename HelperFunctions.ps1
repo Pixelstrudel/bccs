@@ -340,7 +340,7 @@ function CopyAppFilesToFolder {
     )
 
     if ($appFiles -is [String]) {
-        if (!(Test-Path $appFiles -PathType Leaf)) {
+        if (!(Test-Path $appFiles)) {
             $appFiles = @($appFiles.Split(',').Trim() | Where-Object { $_ })
         }
     }
@@ -356,7 +356,14 @@ function CopyAppFilesToFolder {
             CopyAppFilesToFolder -appFile $appFile -folder $folder
             Remove-Item -Path $appFile -Force
         }
-        elseif (Test-Path $appFile) {
+        elseif (Test-Path $appFile -PathType Container) {
+            get-childitem $appFile -Filter '*.app' -Recurse | % {
+                $destFile = Join-Path $folder $_.Name
+                Copy-Item -Path $_.FullName -Destination $destFile -Force
+                $destFile
+            }
+        }
+        elseif (Test-Path $appFile -PathType Leaf) {
             if ([string]::new([char[]](Get-Content $appFile -Encoding byte -TotalCount 2)) -eq "PK") {
                 $tmpFolder = Join-Path (Get-TempDir) ([Guid]::NewGuid().ToString())
                 $copied = $false
@@ -726,7 +733,7 @@ Function CreatePsTestToolFolder {
             $clientDllPath = "C:\Test Assemblies\Microsoft.Dynamics.Framework.UI.Client.dll"
             Copy-Item -Path $clientDllPath -Destination $myClientDllPath
         }
-    } -argumentList $newtonSoftDllPath, $clientDllPath
+    } -argumentList (Get-BcContainerPath -containerName $containerName -Path $newtonSoftDllPath), (Get-BcContainerPath -containerName $containerName -Path $clientDllPath)
 }
 
 function RandomChar([string]$str) {
@@ -747,4 +754,15 @@ function GetRandomPassword {
      (RandomChar $numbers) + `
      (RandomChar $numbers) + `
      (RandomChar $numbers))
+}
+
+function getVolumeMountParameter($volumes, $hostPath, $containerPath) {
+    $volume = $volumes | Where-Object { $_ -like "$hostPath|*" }
+    if ($volume) {
+        $volumeName = $volume.Split('|')[1]
+        "--mount source=$($volumeName),target=$containerPath"
+    }
+    else {
+        "--volume ""$($hostPath):$($containerPath)"""
+    }
 }

@@ -52,6 +52,8 @@
   Include this parameter to skip appSourceCop. You cannot request Microsoft to set this when running validation
  .Parameter skipConnectionTest
   Include this parameter to skip the connection test. If Connection Test fails in validation, Microsoft will execute manual validation.
+ .Parameter throwOnError
+  Include this switch if you want Run-AlValidation to throw an error with the validation results instead of returning them to the caller
  .Parameter useGenericImage
   Specify a private (or special) generic image to use for the Container OS.
  .Parameter multitenant
@@ -96,6 +98,7 @@ Param(
     [switch] $skipUpgrade,
     [switch] $skipAppSourceCop,
     [switch] $skipConnectionTest,
+    [switch] $throwOnError,
     [string] $useGenericImage = (Get-BestGenericImageName),
     [switch] $multitenant,
     [scriptblock] $DockerPull,
@@ -568,35 +571,36 @@ try {
         $appJson = Get-Content $appJsonFile | ConvertFrom-Json
         Remove-Item $tmpFolder -Recurse -Force
     
-        $installedApp = $false
-        if ($installedApps | Where-Object { $_.Name -eq $appJson.Name -and $_.Publisher -eq $appJson.Publisher -and $_.AppId -eq $appJson.Id }) {
-            $installedApp = $true
+        $installedApp = $installedApps | Where-Object { $_.Name -eq $appJson.Name -and $_.Publisher -eq $appJson.Publisher -and $_.AppId -eq $appJson.Id }
+        if ($installedApp -ne $null -and $installedApp.Version -eq $appJson.Version) {
+            Write-Host "Skipping installation of $($installedApp.Name) version $($installedApp.Version), version already installed."
         }
-    
-        $Parameters = @{
-            "containerName" = $containerName
-            "tenant" = $tenant
-            "credential" = $credential
-            "appFile" = $_
-            "skipVerification" = $skipVerification
-            "sync" = $true
-            "install" = !$installedApp
-            "upgrade" = $installedApp
-        }
-    
-        try {
-            Invoke-Command -ScriptBlock $PublishBcContainerApp -ArgumentList $Parameters
-        }
-        catch {
-            if ($parameters.upgrade) {
-                $action = "upgrade"
+        else {
+            $Parameters = @{
+                "containerName" = $containerName
+                "tenant" = $tenant
+                "credential" = $credential
+                "appFile" = $_
+                "skipVerification" = $skipVerification
+                "sync" = $true
+                "install" = ($installedApp -eq $null)
+                "upgrade" = ($installedApp -ne $null)
             }
-            else {
-                $action = "install"
+        
+            try {
+                Invoke-Command -ScriptBlock $PublishBcContainerApp -ArgumentList $Parameters
             }
-            $error = "Unable to $action app $([System.IO.Path]::GetFileName($parameters.appFile)) on container based on $($artifactUrl.Split('?')[0]).`nError is: $($_.Exception.Message)"
-            $validationResult += $error
-            Write-Host -ForegroundColor Red $error
+            catch {
+                if ($parameters.upgrade) {
+                    $action = "upgrade"
+                }
+                else {
+                    $action = "install"
+                }
+                $error = "Unable to $action app $([System.IO.Path]::GetFileName($parameters.appFile)) on container based on $($artifactUrl.Split('?')[0]).`nError is: $($_.Exception.Message)"
+                $validationResult += $error
+                Write-Host -ForegroundColor Red $error
+            }
         }
     }
 }
@@ -692,6 +696,13 @@ Write-Host -ForegroundColor Red @'
 
 '@
 
+if ($throwOnError) {
+    ($validationResult -join "`n") | Write-Error
+}
+else {
+    $validationResult
+}
+
 }
 else {
 Write-Host -ForegroundColor Green @'
@@ -704,8 +715,6 @@ Write-Host -ForegroundColor Green @'
                                                                                                   
 '@
 }
-
-$validationResult
 
 }
 Export-ModuleMember -Function Run-AlValidation
