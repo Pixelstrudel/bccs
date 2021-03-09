@@ -1,8 +1,42 @@
+2.0.7
+Support -bakFile and -replaceExternalDatabases together on New-BcContainer
+Support for preProcessorSymbols in Compile-AppInBcContainer and Run-AlPipeline
+Issue #1720 add suppressBuildSearchIndex to Import-ObjectsToNavContainer
+Add function Get-PlainText
+Run-AlCops sometimes shows the exception instead of the AppSource failures
+
+2.0.6
+Issue #1696 Compile-AppInBcContainer does not throw error on missing RDLC
+Add AddInsFolder parameter to Convert-BcAppsToRuntimePackages
+Issue #1712 Get-NavContainerAppRuntimePackage doesn't return a path when the license is about to expire
+Issue #1710 UploadImportAndApply-ConfigPackageInBcContainer doesn't work with filename
+Issue #1709 Add switch GenerateSymbolReference to Compile-ObjectsInNavContainer.ps1
+Issue #1722 add containername to PowerShell and Command prompts
+Issue #1706 App generation failed without info after fixing #1696
+Issue Cannot download symbols for apps with special characters
+Issue #1728 Get-BcContainerApp doesn't return the appFile
+Support that bcartifactsCacheFolder, containerHelperFolder and dvdPath can be a docker volume instead of a bind mount (for performance)
+Run-AlValidation doesn't fail getting the same app in apps and previousApps (if apps in the middle of the dependency chain hasn't changed)
+Run-AlCops doesn't use previousApp if it is the same version as the app
+Issue #1704 Run-AlValidation with "preprocessorSymbols"
+Issue #1729 Second container on same external database causes previous containers to stop working
+Issue #1739 Publish-BcContainerApp fails with "The remote server returned an error: (403) Forbidden
+Issue #1736 Support specifying a folder (of apps) to Run-AlValidation, Run-AlCops, Run-AlPipeline, Publish-BcContainerApp, Publish-PerTenantExtensionApps and Convert-BcAppsToRuntimePackages
+Issue #1740 Missing help for disabledTests parameter
+Issue #1744 if New-BcAuthContext with client credentials fails, the real error is not shown
+Issue #1726 Add switch -throwOnError to Run-AlValidation
+Issue #1747 Unwanted multitenant image when using replaceExternalDatabases
+Allow running sandbox artifacts in "onprem mode" (from version 18.0 with generic image tag 1.0.1.4 or higher)
+Issue #1749 User not created when using replaceExternalDatabases and cached images
+
 2.0.5
 Issue #1668 Run-AlValidation fails if app filename has a comma (and there is only one app)
 Issue #1675 Convert-BcAppsToRuntimePackages doesn't work with only one app.
 Issue #1678 Setup-BcContainerTestUsers fails on version 18
 Issue #1682 add silent mode to import module
+Flush-ContainerHelperCache will also cleanup generic images not matching your OS
+Add BcAuthContext parameter to functions Create-AadAppsForNav, Create-AadUsersInBcContainer and Replace-BcServerContainer (note that resource should be https://graph.windows.net)
+Modify Run-ConnectionTestToBcContainer to connect and open Extension Management. Basically check whether people can uninstall your app.
 
 2.0.4
 Remove-BcEnvironment fails after waiting for environment removal
