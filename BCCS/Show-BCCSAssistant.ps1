@@ -312,7 +312,7 @@ function Menu-AddCurrentUser() {
 function Menu-UnProtectNavAppSourceFiles() {
         $selection = GetAllContainersFromDocker | Out-GridView -Title "Select a container to set ProtectNavAppSourceFiles to false for" -OutputMode Single
         if ($selection) {
-                Invoke-ScriptInBCContainer -containerName MED-DEV -scriptblock {
+                Invoke-ScriptInBCContainer -containerName $selection.FullName -scriptblock {
                         $server = Get-Service | Where-Object Name -match Dynamics | Select-Object -ExpandProperty Name
                         try {
                                 Set-NAVServerConfiguration -ServerInstance $server -KeyName ProtectNavAppSourceFiles -KeyValue false -ApplyTo all
