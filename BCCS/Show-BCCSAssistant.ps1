@@ -79,6 +79,7 @@ function Show-BCCSAssistant {
                 $(New-MenuItem -DisplayName "create a new container" -Script { Menu-CreateContainer $file }),
                 $(Get-MenuSeparator),
                 $(New-MenuItem -DisplayName "create desktop shortcut for the assistant" -Script { Menu-CreateDesktopShortcut })
+                $(New-MenuItem -DisplayName "allow debugging AL code in RTC debugger" -Script { Menu-UnProtectNavAppSourceFiles })
         )    
         do {
                 Write-Host ""
@@ -308,5 +309,21 @@ function Menu-AddCurrentUser() {
         }       
 }
 
+function Menu-UnProtectNavAppSourceFiles() {
+        $selection = GetAllContainersFromDocker | Out-GridView -Title "Select a container to set ProtectNavAppSourceFiles to false for" -OutputMode Single
+        if ($selection) {
+                Invoke-ScriptInBCContainer -containerName $selection.FullName -scriptblock {
+                        try {
+                                Set-NAVServerConfiguration -ServerInstance BC -KeyName ProtectNavAppSourceFiles -KeyValue false -ApplyTo all
+                                Write-Host "Set ProtectNavAppSourceFiles to false and applied the changes."
+                        }
+                        catch {
+                                Set-NAVServerConfiguration -ServerInstance NAV -KeyName ProtectNavAppSourceFiles -KeyValue false -ApplyTo all 
+                                Write-Host "Set ProtectNavAppSourceFiles to false and applied the changes."
+                        }
+                }
+                Write-Log "Set ProtectNavAppSourceFiles to false for $($selection.FullName)!"
+        }       
+}
 
 Export-ModuleMember -Function Show-BCCSAssistant
