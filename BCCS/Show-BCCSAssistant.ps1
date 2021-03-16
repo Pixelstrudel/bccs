@@ -314,15 +314,14 @@ function Menu-UnProtectNavAppSourceFiles() {
         if ($selection) {
                 Invoke-ScriptInBCContainer -containerName $selection.FullName -scriptblock {
                         try {
-                                Set-NAVServerConfiguration -ServerInstance BC -KeyName ProtectNavAppSourceFiles -KeyValue false -ApplyTo all
-                                Write-Host "Set ProtectNavAppSourceFiles to false and applied the changes."
+                                Set-NAVServerConfiguration -ServerInstance BC -KeyName ProtectNavAppSourceFiles -KeyValue false -ApplyTo all | Out-Null
+                                Write-Host "Successfully set ProtectNavAppSourceFiles to false for ServerInstance BC and applied the changes."
                         }
                         catch {
-                                Set-NAVServerConfiguration -ServerInstance NAV -KeyName ProtectNavAppSourceFiles -KeyValue false -ApplyTo all 
-                                Write-Host "Set ProtectNavAppSourceFiles to false and applied the changes."
+                                Set-NAVServerConfiguration -ServerInstance NAV -KeyName ProtectNavAppSourceFiles -KeyValue false -ApplyTo all | Out-Null
+                                Write-Host "Successfully set ProtectNavAppSourceFiles to false for ServerInstance NAV and applied the changes."
                         }
                 }
-                Write-Log "Set ProtectNavAppSourceFiles to false for $($selection.FullName)!"
         }       
 }
 
