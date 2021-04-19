@@ -89,7 +89,7 @@ function Show-BCCSAssistant {
                 $(New-MenuItem -DisplayName "change windows password" -Script { Menu-ChangePWD $file }),
                 $(New-MenuItem -DisplayName "add current Windows user" -Script { Menu-AddCurrentUser $file }),
                 $(Get-MenuSeparator),
-                $(New-MenuItem -DisplayName "deploy single app" -Script { Menu-DeployApp })
+                $(New-MenuItem -DisplayName "deploy single app" -Script { Menu-DeployApp }),
                 $(New-MenuItem -DisplayName "deploy apps from folder" -Script { Menu-DeployAppsFromFolder })
                 $(Get-MenuSeparator),
                 $(New-MenuItem -DisplayName "create a new template" -Script { Menu-CreateTemplate $file }),
