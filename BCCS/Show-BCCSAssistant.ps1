@@ -43,6 +43,21 @@ Function Get-OpenFile($title, $filter, $initialDirectory) {
         $OpenFileDialog.ShowHelp = $true
 }
 
+Function Get-OpenFolder($title, $initialDirectory) {
+        [System.Reflection.Assembly]::LoadWithPartialName("System.windows.forms") | 
+        Out-Null
+
+        $foldername = New-Object System.Windows.Forms.FolderBrowserDialog
+        $foldername.Description = $title
+        $foldername.rootfolder = "MyComputer"
+        $foldername.SelectedPath = $initialDirectory
+
+        if ($foldername.ShowDialog() -eq "OK") {
+                $folder += $foldername.SelectedPath
+        }
+        return $folder
+}
+
 class MyMenuOption {
         [String]$DisplayName
         [ScriptBlock]$Script
@@ -74,11 +89,15 @@ function Show-BCCSAssistant {
                 $(New-MenuItem -DisplayName "change windows password" -Script { Menu-ChangePWD $file }),
                 $(New-MenuItem -DisplayName "add current Windows user" -Script { Menu-AddCurrentUser $file }),
                 $(Get-MenuSeparator),
+                $(New-MenuItem -DisplayName "deploy single app" -Script { Menu-DeployApp }),
+                $(New-MenuItem -DisplayName "deploy apps from folder" -Script { Menu-DeployAppsFromFolder })
+                $(Get-MenuSeparator),
                 $(New-MenuItem -DisplayName "create a new template" -Script { Menu-CreateTemplate $file }),
                 $(New-MenuItem -DisplayName "remove a template" -Script { Menu-RemoveTemplate $file }),
                 $(New-MenuItem -DisplayName "create a new container" -Script { Menu-CreateContainer $file }),
                 $(Get-MenuSeparator),
                 $(New-MenuItem -DisplayName "create desktop shortcut for the assistant" -Script { Menu-CreateDesktopShortcut })
+                
                 $(New-MenuItem -DisplayName "allow debugging AL code in RTC debugger" -Script { Menu-UnProtectNavAppSourceFiles })
         )    
         do {
@@ -323,6 +342,199 @@ function Menu-UnProtectNavAppSourceFiles() {
                         }
                 }
         }       
+}
+
+function Menu-DeployAppsFromFolder() {
+        $selection = GetAllContainersFromDocker | Out-GridView -Title "Select a container to install apps into" -OutputMode Single
+        if ($selection) {
+                $appFolder = Get-OpenFolder "Pick folder with apps to install into $($selection.FullName)" $PSScriptRoot
+                if (Test-Path -path $appFolder) {
+                        Deploy-AppsFromFolder -containerName $selection.fullName -folderPath $appFolder
+                }
+                else {
+                        throw "Not a valid folder"
+                }
+        }
+}
+
+function Menu-DeployApp() {
+        $selection = GetAllContainersFromDocker | Out-GridView -Title "Select a container to install an app into" -OutputMode Single
+        if ($selection) {
+                $appFile = Get-OpenFile "Pick app to install" "App files (*.app)|*.app" $PSScriptRoot
+                if (Test-Path -path $appFile) {
+                        Publish-BCContainerApp -containerName $selection.fullName -appFile $appFile -skipVerification -sync -install
+                }
+                else {
+                        throw "Not a valid app file"
+                }
+        }
+}
+
+function Deploy-AppsFromFolder($containerName, $folderPath) {
+        # Input
+        [string] $syncMode = "Add"
+        [bool] $unpublishOtherVersions = $true
+
+        # Code
+        $destinationPath = "C:\app-deployment"
+
+        #Create Destination Path Folder
+        Invoke-ScriptInBcContainer $containerName -scriptblock { Param($destinationPath)
+                New-Item -ItemType Directory -Path $destinationPath -Force
+        } -argumentList $destinationPath
+
+        Get-ChildItem -Path $folderPath -Filter "*.app" -Recurse | ForEach-Object {
+                $containerAppFile = Join-Path $destinationPath $_
+                $appFile = $_.FullName
+
+                try {
+                        Copy-FileToBcContainer $containerName -localPath $appFile -containerPath $containerAppFile
+                }
+                catch {
+                        docker cp $appFile "$containerName`:$containerAppFile"
+                }
+        }
+
+        Invoke-ScriptInBcContainer $containerName -scriptblock {
+                Param(
+                        $destinationPath,
+                        $syncMode,
+                        $unpublishOtherVersions
+                )
+        
+                $script:appsToInstall = @()
+                $script:appPathsToInstall = @()
+
+                function AddAnApp {
+                        Param($anApp, $appPath) 
+                        $alreadyAdded = $script:appsToInstall | Where-Object { $_.AppId -eq $anApp.AppId }
+                        if (-not ($alreadyAdded)) {
+                                AddDependencies -anApp $anApp
+                                $script:appsToInstall += $anApp
+                                $script:appPathsToInstall += $appPath
+                        }
+                }
+        
+                function AddDependency {
+                        Param($dependency)
+                        $dependentApp = $appInfos.Keys | Where-Object { $_.AppId -eq $dependency.AppId }
+                        if ($dependentApp) {
+                                AddAnApp -anApp $dependentApp -appPath $appInfos.Item($dependentApp)
+                        }
+                }
+        
+                function AddDependencies {
+                        Param($anApp)
+                        if (($anApp) -and ($anApp.Dependencies)) {
+                                $anApp.Dependencies | % { AddDependency -dependency $_ }
+                        }
+                }
+
+                Import-Module "C:\Program Files\Microsoft Dynamics Nav\*\Service\NavAdminTool.ps1" | Out-Null
+                $serverInstance = "BC"
+        
+                $appInfos = @{}
+                Get-ChildItem -Path $destinationPath -Filter "*.app" | ForEach-Object {
+                        $appInfo = Get-NavAppInfo -Path $_.FullName
+                        if (!$appInfos.ContainsKey($appInfo)) {
+                                $appInfos.Add($appInfo, $_.FullName)
+                        }
+                }
+
+                $appInfos.GetEnumerator() | % {
+                        AddAnApp -anApp $_.Key -appPath $_.Value
+                }
+        
+                Write-Host "Using following Dependency Tree:"
+
+                $script:appsToInstall | % {
+                        Write-Host "- $($_.Name)"
+                }
+        
+                function Get-ExistingDependencies {
+                        Param($baseApp)
+                        $publishedApps = Get-NAVAppInfo -ServerInstance $serverInstance -Tenant "default" -TenantSpecificProperties
+                        foreach ($publishedApp in $publishedApps) {
+                                if ($publishedApp.IsInstalled) {
+                                        $detailedAppInfo = Get-NAVAppInfo -ServerInstance $serverInstance -Tenant "default" -TenantSpecificProperties -Name $publishedApp.Name -Publisher $publishedApp.Publisher -Version $publishedApp.Version
+                                        foreach ($dependency in $detailedAppInfo.Dependencies) {
+                                                if ($dependency.AppId -eq $baseApp.AppId) {
+                                                        $script:dependentApps += $detailedAppInfo
+                                                        Get-ExistingDependencies -baseApp $detailedAppInfo
+                                                }
+                                        }
+                                }
+                        }
+                }
+
+                $script:appPathsToInstall | % {
+                        $appPath = $_
+                        Write-Host "Starting Installation from Path: $appPath"
+            
+                        $appInfo = Get-NavAppInfo -Path $appPath
+        
+                        $script:dependentApps = @()
+                        Write-Host "Retrieving Dependencies for $($appInfo.Name)"
+                        Get-ExistingDependencies -baseApp $appInfo
+
+                        $skipInstallation = $false
+                        $previousAppInfo = $null
+                        Get-NAVAppInfo $serverInstance -Tenant default -TenantSpecificProperties -Name $appInfo.Name -Publisher $appInfo.Publisher | Where-Object {
+                                if ($_.IsInstalled) {
+                                        if ($appInfo.Version -le $_.Version) {
+                                                Write-Warning "New Version $($appInfo.Version) is lower or equal to the previously installed Version $($_.Version) of the App $($_.Name) --> Skipping $($_.Name)"
+                                                $skipInstallation = $true
+                                        }
+                                        else {
+                                                $previousAppInfo = $_
+                                                Write-Host "Uninstalling $($_.Name) with Version $($_.Version)"
+                                                Uninstall-NAVApp $serverInstance -Name $_.Name -Publisher $_.Publisher -Version $_.Version -Force
+                                        }
+                                }
+                        }
+
+                        if (!$skipInstallation) {
+                                try {
+                                        Write-Host "Installing $($appInfo.Name) with Version $($appInfo.Version)"
+                                        Publish-NAVApp -ServerInstance $serverInstance -Path $appPath -SkipVerification
+                                        Sync-NAVApp $serverInstance -Name $appInfo.Name -Publisher $appInfo.Publisher -Version $appInfo.Version -Mode $syncMode -Force
+                                        Start-NAVAppDataUpgrade $serverInstance -Name $appInfo.Name -Publisher $appInfo.Publisher -Version $appInfo.Version -ErrorAction "Ignore"
+                                        Install-NavApp $serverInstance -Name $appInfo.Name -Publisher $appInfo.Publisher -Version $appInfo.Version
+                                        Write-Host "Successfully installed $($appInfo.Name) with Version $($appInfo.Version)"
+                                }
+                                catch {
+                                        if ($previousAppInfo) {
+                                                Write-Host "Re-installing previous Version $($previousAppInfo.Version) of $($previousAppInfo.Name) due to failed Installation of the newer version"
+                                                Install-NavApp $serverInstance -Name $previousAppInfo.Name -Publisher $previousAppInfo.Publisher -Version $previousAppInfo.Version
+                                        }
+                    
+                                        $installationError = $_
+                                }
+
+                                foreach ($dependentApp in $script:dependentApps) {
+                                        Write-Host "Re-installing Dependency $($dependentApp.Name) with Version $($dependentApp.Version)"
+                                        Install-NAVApp $serverInstance -Name $dependentApp.Name -Publisher $dependentApp.Publisher -Version $dependentApp.Version -Force
+                                }
+
+                                if ($installationError) {
+                                        throw "Installation of $($appInfo.Name) failed: $installationError"
+                                }
+
+                                if ($unpublishOtherVersions) {
+                                        Write-Host "Unpublishing other Versions of App $($appInfo.Name)"
+                                        $unpublishableApps = Get-NavAppInfo -ServerInstance $serverInstance -Name $appInfo.Name
+                                        foreach ($unpublishableApp in $unpublishableApps) {
+                                                if ($unpublishableApp.Version -ne $appInfo.Version) {
+                                                        Unpublish-NAVApp -ServerInstance $serverInstance -Name $unpublishableApp.Name -Version $unpublishableApp.Version
+                                                }
+                                        }
+                                }
+                        }
+                }
+
+                Write-Host "Removing Folder $destinationPath"
+                Remove-Item $destinationPath -Force -Recurse
+        } -argumentList $destinationPath, $syncMode, $unpublishOtherVersions
 }
 
 Export-ModuleMember -Function Show-BCCSAssistant
