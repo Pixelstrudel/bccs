@@ -1,9 +1,48 @@
+2.0.11
+Add parameter reUseContainer to Run-AlPipeline to use existing container for the pipeline
+Include Tests-Marketing when installing test apps
+Add parameter SharedFolder to Run-AlPipeline to share a folder from the host to the container
+Allow to Run-AlPipeline without source and only installApps and/or installTestApps
+Display Note in Run-AlPipeline and Run-AlValidation if ShowMyCode is true (https://aka.ms/showMyCode)
+Add function Add-DomainToTraefikConfig to add a domain to traefik v1 config
+Change traefik containers to use ContainerName as hostname
+Add config setting TraefikUseDnsNameAsHostName to revert the behavior and use the public DNS name as hostname
+Issue #1886 Error creating BC 19 container (Test Runner on Permissions Mock by Microsoft 19.0.0.0)
+Issue #1870 Do not remove images currently in use in Flush-BcContainerHelperCache
+
+2.0.10
+Issue #1857 Compile-AppInBcContainer doesn't work with 19.0 containers
+Issue #1860 Wizard unaware of new license rules for 18.0
+
+2.0.9
+Regression in New-BcEnvironment - use of uninitialized variable
+
+2.0.8
+Issue #1812: Allow passing an array of paths to all "font" parameters
+PR #1799 Add support for Service principal in Create-AadAppsForNav
+PR #1801 Support SqlServer PS module in Restore-BcDatabaseFromArtifacts.ps1
+Issue #1794 AssignPremiumPlan fails when using external database
+Issue #1810 Publish-NavContainerApp is not using Publish-NAVApp -Force which leads to user interaction in some situations
+Issue #1790 Add caching option SandboxArtifacts to flush-ContainerHelperCache to only flush sandbox artifacts
+Issue #1822 Copy-AlSourceFiles doesn't support entitlement, permissionset and permissionsetextension
+Issue #1820 Add SqlTimeout to New-BcContainer - default is and was always 300 (= 5 minutes)
+Issue #1829 Import-module fails with no good error when config file is bad or empty
+Breaking change: Fix Install-BcAppFromAppSource to use new admin center API (remove old hack)
+Issue #1815 Page 810 Web Service takes very long to open
+Added parameter -network to New-BcContainer to select which docker network the container should use
+Issue #1833 Add warning if using ClickOnce and useTraefik
+Issue #1793 Setup-TraefikContainerForNavContainers | Use my own certificate | traefik.toml missing link to certificate
+Use SkipVerification on installApps and previousApps as the certificate on old apps might have expired
+Issue #1842 JIT initialize $bccontainerhelperconfig variable
+Enable Encryption during validation
+
 2.0.7
 Support -bakFile and -replaceExternalDatabases together on New-BcContainer
 Support for preProcessorSymbols in Compile-AppInBcContainer and Run-AlPipeline
 Issue #1720 add suppressBuildSearchIndex to Import-ObjectsToNavContainer
 Add function Get-PlainText
 Run-AlCops sometimes shows the exception instead of the AppSource failures
+Get-BcArtifactUrl returns an older publicpreview version instead of a newer insider build
 
 2.0.6
 Issue #1696 Compile-AppInBcContainer does not throw error on missing RDLC

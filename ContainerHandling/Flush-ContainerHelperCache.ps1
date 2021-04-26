@@ -11,6 +11,7 @@
   - applicationCache are the test applications runtime cache (15.x containers)
   - bakFolderCache are version specific backup sets
   - bcartifacts are artifacts downloaded for spinning up containers
+  - sandboxartifacts are artifacts downloaded for spinning up containers
   - images are images built on artifacts using New-BcImage or New-BcContainer
  .Parameter keepDays
   When specifying a value in keepDays, the function will try to keep cached information, which has been used during the last keepDays days. Default is 0 - to flush all cache.
@@ -35,12 +36,16 @@ function Flush-ContainerHelperCache {
         $folders += @("*-??-files")
     }
 
-    if ($caches.Contains('all') -or $caches.Contains('bcartifacts')) {
+    if ($caches.Contains('all') -or $caches.Contains('bcartifacts') -or $caches.Contains('sandboxartifacts')) {
         $bcartifactsCacheFolder = (Get-ContainerHelperConfig).bcartifactsCacheFolder
+        $subfolder = "*"
+        if (!($caches.Contains('all') -or $caches.Contains('bcartifacts'))) {
+            $subfolder = "sandbox"
+        }
         if (Test-Path $bcartifactsCacheFolder) {
             if ($keepDays) {
                 $removeBefore = [DateTime]::Now.Subtract([timespan]::FromDays($keepDays))
-                Get-ChildItem -Path $bcartifactsCacheFolder | ?{ $_.PSIsContainer } | ForEach-Object {
+                Get-ChildItem -Path $bcartifactsCacheFolder | ?{ $_.PSIsContainer -and $_.Name -like $subfolder } | ForEach-Object {
                     $level1 = $_.FullName
                     Get-ChildItem -Path $level1 | ?{ $_.PSIsContainer } | ForEach-Object {
                         $level2 = $_.FullName
@@ -65,7 +70,7 @@ function Flush-ContainerHelperCache {
                 }
             }
             else {
-                Get-ChildItem -Path $bcartifactsCacheFolder | ?{ $_.PSIsContainer } | ForEach-Object {
+                Get-ChildItem -Path $bcartifactsCacheFolder | ?{ $_.PSIsContainer -and $_.Name -like $subfolder } | ForEach-Object {
                     Write-Host "Removing Cache $($_.FullName)"
                     [System.IO.Directory]::Delete($_.FullName, $true)
                 }
@@ -101,39 +106,42 @@ function Flush-ContainerHelperCache {
             $bestGenericImageId = $bestGenericImage.Split('|')[1]
             $bestGenericImageInspect = docker inspect $bestGenericImageID | ConvertFrom-Json
         }
+        $usedImages = docker ps -a --no-trunc --format '{{.Image}}'
         $allImages | ForEach-Object {
             $imageName = $_.Split('|')[0]
-            $imageID = $_.Split('|')[1]
-            $inspect = docker inspect $imageID | ConvertFrom-Json
-            $artifactUrl = $inspect.config.Env | Where-Object { $_ -like "artifactUrl=*" }
-            if ($artifactUrl) {
-                $artifactUrl = $artifactUrl.Split('?')[0]
-                "artifactUrl=https://bcartifacts.azureedge.net/",
-                "artifactUrl=https://bcinsider.azureedge.net/",
-                "artifactUrl=https://bcprivate.azureedge.net/",
-                "artifactUrl=https://bcpublicpreview.azureedge.net/" | % {
-                    if ($artifactUrl -like "$($_)*") {
-                        $cacheFolder = Join-Path $bcContainerHelperConfig.bcartifactsCacheFolder $artifactUrl.SubString($_.Length)
-                        if (-not (Test-Path $cacheFolder)) {
-                            Write-Host "$imageName was built on artifacts which was removed from the cache, removing image"
-                            if (-not (DockerDo -command rmi -parameters @("--force") -imageName $imageID -ErrorAction SilentlyContinue)) {
-                                Write-Host "WARNING: Unable to remove image"
+            if ($usedImages -notcontains $imageName) {
+                $imageID = $_.Split('|')[1]
+                $inspect = docker inspect $imageID | ConvertFrom-Json
+                $artifactUrl = $inspect.config.Env | Where-Object { $_ -like "artifactUrl=*" }
+                if ($artifactUrl) {
+                    $artifactUrl = $artifactUrl.Split('?')[0]
+                    "artifactUrl=https://bcartifacts.azureedge.net/",
+                    "artifactUrl=https://bcinsider.azureedge.net/",
+                    "artifactUrl=https://bcprivate.azureedge.net/",
+                    "artifactUrl=https://bcpublicpreview.azureedge.net/" | % {
+                        if ($artifactUrl -like "$($_)*") {
+                            $cacheFolder = Join-Path $bcContainerHelperConfig.bcartifactsCacheFolder $artifactUrl.SubString($_.Length)
+                            if (-not (Test-Path $cacheFolder)) {
+                                Write-Host "$imageName was built on artifacts which was removed from the cache, removing image"
+                                if (-not (DockerDo -command rmi -parameters @("--force") -imageName $imageID -ErrorAction SilentlyContinue)) {
+                                    Write-Host "WARNING: Unable to remove image"
+                                }
                             }
                         }
                     }
                 }
-            }
-            elseif ($bestGenericImage) {
-                try {
-                    if ($inspect.config.Labels.maintainer -eq "Dynamics SMB" -and 
-                        $inspect.Config.Labels.tag -ne "" -and 
-                        $inspect.Config.Labels.osversion -ne $bestGenericImageInspect.Config.Labels.osversion) {
-                        Write-Host "$imageName is a generic image for an old version of your OS, removing image"
-                        if (-not (DockerDo -command rmi -parameters @("--force") -imageName $imageID -ErrorAction SilentlyContinue)) {
-                            Write-Host "WARNING: Unable to remove image"
+                elseif ($bestGenericImage) {
+                    try {
+                        if ($inspect.config.Labels.maintainer -eq "Dynamics SMB" -and 
+                            $inspect.Config.Labels.tag -ne "" -and 
+                            $inspect.Config.Labels.osversion -ne $bestGenericImageInspect.Config.Labels.osversion) {
+                            Write-Host "$imageName is a generic image for an old version of your OS, removing image"
+                            if (-not (DockerDo -command rmi -parameters @("--force") -imageName $imageID -ErrorAction SilentlyContinue)) {
+                                Write-Host "WARNING: Unable to remove image"
+                            }
                         }
-                    }
-                } catch {}
+                    } catch {}
+                }
             }
         }
         Write-Host "Running Docker image prune"
