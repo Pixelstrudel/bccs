@@ -93,7 +93,7 @@
  .Parameter multitenant
   Setup container for multitenancy by adding this switch
  .Parameter addFontsFromPath
-  Enumerate all fonts from this path and install them in the container
+  Enumerate all fonts from this path or array of paths and install them in the container
  .Parameter featureKeys
   Optional hashtable of featureKeys, which can be applied to the container database
  .Parameter clickonce
@@ -138,6 +138,8 @@
  .Parameter PublicDnsName
   Use this parameter to specify which public dns name is pointing to this container.
   This parameter is necessary if you want to be able to connect to the container from outside the host.
+ .Parameter network
+  Use this parameter to override the default network settings in the container (corresponds to --network on docker run)
  .Parameter dns
   Use this parameter to override the default dns settings in the container (corresponds to --dns on docker run)
  .Parameter runTxt2AlInContainer
@@ -167,6 +169,8 @@
   Specify a URL or path to a .vsix file in order to override the .vsix file in the image with this.
   Use Get-LatestAlLanguageExtensionUrl to get latest AL Language extension from Marketplace.
   Use Get-AlLanguageExtensionFromArtifacts -artifactUrl (Get-BCArtifactUrl -select NextMajor -sasToken $insiderSasToken) to get latest insider .vsix
+ .Parameter sqlTimeout
+  SQL Timeout for database restore operations
  .Example
   New-BcContainer -accept_eula -containerName test
  .Example
@@ -228,7 +232,7 @@ function New-BcContainer {
         [switch] $assignPremiumPlan,
         [switch] $multitenant,
         [switch] $filesOnly,
-        [string] $addFontsFromPath = "",
+        [string[]] $addFontsFromPath = @(""),
         [hashtable] $featureKeys = $null,
         [switch] $clickonce,
         [switch] $includeTestToolkit,
@@ -240,6 +244,7 @@ function New-BcContainer {
         [ValidateSet('Windows','NavUserPassword','UserPassword','AAD')]
         [string] $auth='Windows',
         [int] $timeout = 1800,
+        [int] $sqlTimeout = 300,
         [string[]] $additionalParameters = @(),
         $myScripts = @(),
         [string] $TimeZoneId = $null,
@@ -252,6 +257,7 @@ function New-BcContainer {
         [int] $DeveloperServicesPort,
         [int[]] $PublishPorts = @(),
         [string] $PublicDnsName,
+        [string] $network,
         [string] $dns,
         [switch] $useTraefik,
         [switch] $useCleanDatabase,
@@ -459,7 +465,10 @@ function New-BcContainer {
     $dockerClientVersion = $dockerVersion.Split('/')[1]
     $dockerServerVersion = $dockerVersion.Split('/')[2]
 
-    if ($dockerOS -ne "Windows") {
+    if ("$dockerOS" -eq "") {
+        throw "Docker service is not yet ready."
+    }
+    elseif ($dockerOS -ne "Windows") {
         throw "Docker is running $dockerOS containers, you need to switch to Windows containers."
    	}
     Write-Host "Docker Client Version is $dockerClientVersion"
@@ -734,7 +743,14 @@ function New-BcContainer {
     Write-Host "Using image $imageName"
     $inspect = docker inspect $imageName | ConvertFrom-Json
 
+    if ($sqlTimeout -ne 300) {
+        $parameters += "--env sqlTimeout=$sqlTimeout"
+    }
+
     if ($clickonce) {
+        if ($useTraefik) {
+            Write-Host "WARNING: ClickOnce doesn't work with traefik v1 (which is the one used in this version of ContainerHelper)"
+        }
         $parameters += "--env clickonce=Y"
     }
 
@@ -772,6 +788,10 @@ function New-BcContainer {
 
     if ($dns) {
         $parameters += "--dns $dns"
+    }
+
+    if ($network) {
+        $parameters += "--network $network"
     }
 
     $publishPorts | ForEach-Object {
@@ -1431,7 +1451,7 @@ if (!(Test-Path "c:\navpfiles\*")) {
 ') | Add-Content -Path "$myfolder\AdditionalSetup.ps1"
     }
 
-    if ($assignPremiumPlan -and !$restoreBakFolder) {
+    if ($assignPremiumPlan -and !$restoreBakFolder -and !$skipDatabase) {
         if (!(Test-Path -Path "$myfolder\SetupNavUsers.ps1")) {
             ('# Invoke default behavior
               . (Join-Path $runPath $MyInvocation.MyCommand.Name)
@@ -1490,6 +1510,7 @@ if ($multitenant) {
     Get-NavTenant -serverInstance $serverInstance | % {
         $tenantHostname = $hostname.insert($dotidx,"-$($_.Id)")
         . (Join-Path $PSScriptRoot "updatehosts.ps1") -hostsFile "c:\driversetc\hosts" -theHostname $tenantHostname -theIpAddress $ip
+        . (Join-Path $PSScriptRoot "updatehosts.ps1") -hostsFile "c:\windows\system32\drivers\etc\hosts" -theHostname $tenantHostname -theIpAddress $ip
     }
 }
 ') | Add-Content -Path "$myfolder\AdditionalOutput.ps1"
@@ -1502,6 +1523,16 @@ if ($multitenant) {
     else {
 
         Copy-Item -Path (Join-Path $PSScriptRoot "updatehosts.ps1") -Destination (Join-Path $myfolder "updatecontainerhosts.ps1") -Force
+        ('
+if ($multitenant) {
+    $dotidx = $hostname.indexOf(".")
+    if ($dotidx -eq -1) { $dotidx = $hostname.Length }
+    Get-NavTenant -serverInstance $serverInstance | % {
+        $tenantHostname = $hostname.insert($dotidx,"-$($_.Id)")
+        . (Join-Path $PSScriptRoot "updatecontainerhosts.ps1") -hostsFile "c:\windows\system32\drivers\etc\hosts" -theHostname $tenantHostname -theIpAddress "127.0.0.1"
+    }
+}
+') | Add-Content -Path "$myfolder\AdditionalOutput.ps1"
     ('
 . (Join-Path $PSScriptRoot "updatecontainerhosts.ps1")
 ') | Add-Content -Path "$myfolder\SetupVariables.ps1"
@@ -1540,8 +1571,6 @@ if ($multitenant) {
         $snapRule="PathPrefix:${snapPart};ReplacePathRegex: ^${snapPart}(.*) /$ServerInstance`$1"
         $dlRule="PathPrefixStrip:${dlPart}"
 
-        $traefikHostname = $publicDnsName.Split(".")[0]
-
         $webPort = "443"
         if ($forceHttpWithTraefik) {
             $webPort = "80"
@@ -1551,8 +1580,12 @@ if ($multitenant) {
             $traefikProtocol = "http"
         }
 
-        $additionalParameters += @("--hostname $traefikHostname",
-                                   "-e webserverinstance=$containerName",
+        if ($bcContainerHelperConfig.TraefikUseDnsNameAsHostName) {
+            $traefikHostname = $publicDnsName.Split(".")[0]
+            $additionalParameters += @("--hostname $traefikHostname")
+        }
+
+        $additionalParameters += @("-e webserverinstance=$containerName",
                                    "-e publicdnsname=$publicDnsName", 
                                    "-l `"traefik.protocol=$traefikProtocol`"",
                                    "-l `"traefik.web.frontend.rule=$webclientRule`"", 
@@ -1804,7 +1837,7 @@ if (-not `$restartingInstance) {
                 Invoke-ScriptInBcContainer -containerName $containerName -scriptblock {
                     Set-NAVServerConfiguration -ServerInstance $ServerInstance -KeyName "Multitenant" -KeyValue "true" -ApplyTo ConfigFile
                 }
-                Restore-DatabasesInBcContainer -containerName $containerName -bakFolder $bakFolder -tenant $tenants
+                Restore-DatabasesInBcContainer -containerName $containerName -bakFolder $bakFolder -tenant $tenants -sqlTimeout $sqlTimeout
             }
         }
         else {

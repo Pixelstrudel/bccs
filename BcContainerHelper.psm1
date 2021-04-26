@@ -38,6 +38,7 @@ function Get-ContainerHelperConfig {
             "timeStampServer" = "http://timestamp.digicert.com"
             "sandboxContainersAreMultitenantByDefault" = $true
             "useSharedEncryptionKeys" = $true
+            "psSessionTimeout" = 0
             "mapCountryCode" = [PSCustomObject]@{
                 "ae" = "w1"
                 "br" = "w1"
@@ -45,6 +46,7 @@ function Get-ContainerHelperConfig {
                 "ee" = "w1"
                 "fo" = "dk"
                 "gl" = "dk"
+                "gr" = "w1"
                 "hk" = "w1"
                 "hr" = "w1"
                 "hu" = "w1"
@@ -67,19 +69,27 @@ function Get-ContainerHelperConfig {
                 "vn" = "w1"
                 "za" = "w1"
             }
+            "TraefikUseDnsNameAsHostName" = $false
         }
         $bcContainerHelperConfigFile = "C:\ProgramData\BcContainerHelper\BcContainerHelper.config.json"
         if (Test-Path $bcContainerHelperConfigFile) {
-            $savedConfig = Get-Content $bcContainerHelperConfigFile | ConvertFrom-Json
-            $keys = $bcContainerHelperConfig.Keys | % { $_ }
-            $keys | % {
-                if ($savedConfig.PSObject.Properties.Name -eq "$_") {
-                    if (!$silent) {
-                        Write-Host "Setting $_ = $($savedConfig."$_")"
+            try {
+                $savedConfig = Get-Content $bcContainerHelperConfigFile | ConvertFrom-Json
+                if ("$savedConfig") {
+                    $keys = $bcContainerHelperConfig.Keys | % { $_ }
+                    $keys | % {
+                        if ($savedConfig.PSObject.Properties.Name -eq "$_") {
+                            if (!$silent) {
+                                Write-Host "Setting $_ = $($savedConfig."$_")"
+                            }
+                            $bcContainerHelperConfig."$_" = $savedConfig."$_"
+            
+                        }
                     }
-                    $bcContainerHelperConfig."$_" = $savedConfig."$_"
-        
                 }
+            }
+            catch {
+                throw "Error reading configuration file $bcContainerHelperConfigFile, cannot import module."
             }
         }
         Export-ModuleMember -Variable bcContainerHelperConfig
@@ -210,6 +220,7 @@ Check-BcContainerHelperPermissions -Silent
 . (Join-Path $PSScriptRoot "ContainerHandling\Flush-ContainerHelperCache.ps1")
 . (Join-Path $PSScriptRoot "ContainerHandling\Get-LatestAlLanguageExtensionUrl.ps1")
 . (Join-Path $PSScriptRoot "ContainerHandling\Get-AlLanguageExtensionFromArtifacts.ps1")
+. (Join-Path $PSScriptRoot "ContainerHandling\traefik\Add-DomainToTraefikConfig.ps1")
 
 # Object Handling functions
 . (Join-Path $PSScriptRoot "ObjectHandling\Export-NavContainerObjects.ps1")
